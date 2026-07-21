@@ -708,13 +708,16 @@ class DataFetcher:
         book_value = metrics.get('book_value_per_share', 0)
         current_price = metrics.get('current_price', 0)
 
+        # Default MoS to NaN when the Graham Number cannot be calculated
+        # (negative EPS or negative book value). Returning 0 here was misleading —
+        # downstream code read it as "priced at intrinsic value".
         result = {
             'ticker': ticker,
             'eps': eps,
             'book_value_per_share': book_value,
             'current_price': current_price,
             'graham_number': 0,
-            'margin_of_safety': 0,
+            'margin_of_safety': np.nan,
             'is_undervalued': False
         }
 
