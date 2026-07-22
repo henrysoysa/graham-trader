@@ -73,6 +73,166 @@ if 'backtest_results' not in st.session_state:
     st.session_state.backtest_results = None
 
 
+# ------------------------------------------------------------------
+# Shared stock-universe selector
+# ------------------------------------------------------------------
+# A single source of truth for the market/universe picker so that EVERY
+# page (Screener, Portfolio Simulator, Backtesting) offers the same choices
+# and actually honours them. Previously the Simulator and Backtesting pages
+# hardcoded the S&P 500, which made the app appear to "always select the US".
+
+UNIVERSE_OPTIONS = [
+    "--- Developed Markets (Large Cap) ---",
+    "S&P 500 (USA)",
+    "NASDAQ-100 (USA)",
+    "Dow 30 (USA)",
+    "FTSE 100 (UK)",
+    "DAX (Germany)",
+    "CAC 40 (France)",
+    "Nikkei 225 (Japan)",
+    "ASX 200 (Australia)",
+    "TSX 60 (Canada)",
+    "--- Emerging Markets (Large Cap) ---",
+    "India - NIFTY 50",
+    "India - SENSEX 30",
+    "Brazil - BOVESPA",
+    "China - Hong Kong (HSI)",
+    "China - US ADRs",
+    "South Africa - JSE Top 40",
+    "Mexico - IPC",
+    "Indonesia - IDX",
+    "Vietnam - VN30",
+    "Emerging Markets ADRs (Recommended)",
+    "--- Broader Developed Markets ---",
+    "STOXX Europe 600",
+    "FTSE 250 (UK Mid Cap)",
+    "TOPIX Core 30 (Japan)",
+    "KOSPI 200 (South Korea)",
+    "Taiwan 50",
+    "Straits Times Index (Singapore)",
+    "SMI (Switzerland)",
+    "--- High-Growth Emerging Economies 🚀 ---",
+    "India - NIFTY Next 50",
+    "India - Smallcap 100",
+    "Vietnam - VN100",
+    "Philippines - PSEi",
+    "Thailand - SET50",
+    "Malaysia - KLCI",
+    "Bangladesh - DSE (limited data)",
+    "Egypt - EGX 30",
+    "Saudi Arabia - TASI",
+    "UAE - ADX / DFM",
+    "Turkey - BIST 100",
+    "Poland - WIG 20",
+    "Pakistan - KSE 100 (limited data)",
+    "Growth Markets ADRs (Recommended) 🚀",
+    "--- Hidden Gems (Small/Mid Cap) 💎 ---",
+    "Russell 2000 (US Small Caps)",
+    "India - Mid Caps",
+    "Brazil - Small Caps",
+    "China - Small Cap ADRs",
+    "Emerging Markets Small Caps 🌟",
+    "--- Other ---",
+    "Custom Tickers",
+]
+
+UNIVERSE_MAPPING = {
+    # Developed Markets
+    "S&P 500 (USA)": "SP500",
+    "NASDAQ-100 (USA)": "NASDAQ100",
+    "Dow 30 (USA)": "DOW30",
+    "FTSE 100 (UK)": "FTSE100",
+    "DAX (Germany)": "DAX",
+    "CAC 40 (France)": "CAC40",
+    "Nikkei 225 (Japan)": "NIKKEI225",
+    "ASX 200 (Australia)": "ASX200",
+    "TSX 60 (Canada)": "TSX60",
+    # Emerging Markets
+    "India - NIFTY 50": "INDIA_NIFTY50",
+    "India - SENSEX 30": "INDIA_SENSEX",
+    "Brazil - BOVESPA": "BRAZIL_BOVESPA",
+    "China - Hong Kong (HSI)": "CHINA_HSI",
+    "China - US ADRs": "CHINA_ADR",
+    "South Africa - JSE Top 40": "SOUTHAFRICA_TOP40",
+    "Mexico - IPC": "MEXICO_IPC",
+    "Indonesia - IDX": "INDONESIA_IDX",
+    "Vietnam - VN30": "VIETNAM_VN30",
+    "Emerging Markets ADRs (Recommended)": "EMERGING_ADR",
+    # Small/Mid Cap Discovery
+    "Russell 2000 (US Small Caps)": "RUSSELL2000",
+    "India - Mid Caps": "INDIA_MIDCAP",
+    "Brazil - Small Caps": "BRAZIL_SMALLCAP",
+    "China - Small Cap ADRs": "CHINA_SMALLCAP",
+    "Emerging Markets Small Caps 🌟": "EMERGING_SMALLCAP",
+    # Broader Developed Markets
+    "STOXX Europe 600": "STOXX600",
+    "FTSE 250 (UK Mid Cap)": "FTSE250",
+    "TOPIX Core 30 (Japan)": "TOPIX_CORE30",
+    "KOSPI 200 (South Korea)": "KOSPI200",
+    "Taiwan 50": "TAIWAN50",
+    "Straits Times Index (Singapore)": "STI_SINGAPORE",
+    "SMI (Switzerland)": "SMI_SWISS",
+    # High-Growth Emerging Economies
+    "India - NIFTY Next 50": "INDIA_NIFTY_NEXT50",
+    "India - Smallcap 100": "INDIA_SMALLCAP100",
+    "Vietnam - VN100": "VIETNAM_VN100",
+    "Philippines - PSEi": "PHILIPPINES_PSEI",
+    "Thailand - SET50": "THAILAND_SET50",
+    "Malaysia - KLCI": "MALAYSIA_KLCI",
+    "Bangladesh - DSE (limited data)": "BANGLADESH_DSE",
+    "Egypt - EGX 30": "EGYPT_EGX30",
+    "Saudi Arabia - TASI": "SAUDI_TASI",
+    "UAE - ADX / DFM": "UAE_ADX_DFM",
+    "Turkey - BIST 100": "TURKEY_BIST100",
+    "Poland - WIG 20": "POLAND_WIG20",
+    "Pakistan - KSE 100 (limited data)": "PAKISTAN_KSE100",
+    "Growth Markets ADRs (Recommended) 🚀": "GROWTH_MARKETS_ADR",
+}
+
+UNIVERSE_HELP = (
+    "🚀 = High-growth economies (IMF 2026–2030 projections). "
+    "💎 = Hidden Gems. ADRs = US-listed, easiest to trade."
+)
+
+
+def select_universe(widget_key, default_custom="AAPL, MSFT, GOOGL, JNJ, PG"):
+    """Render the shared universe selector.
+
+    Returns a tuple ``(universe_option, tickers, index_key)`` where:
+      * ``tickers`` is a concrete list when the user typed custom tickers,
+        an empty list when a separator row is selected, or ``None`` when a
+        market index was chosen (fetch it via ``index_key``).
+      * ``index_key`` is the data_fetcher key for the chosen index, or
+        ``None`` for custom/separator selections.
+    """
+    universe_option = st.selectbox(
+        "Stock Universe",
+        UNIVERSE_OPTIONS,
+        key=f"universe_{widget_key}",
+        help=UNIVERSE_HELP,
+    )
+
+    if universe_option == "Custom Tickers":
+        custom_tickers_input = st.text_input(
+            "Enter ticker symbols (comma-separated)",
+            default_custom,
+            key=f"custom_{widget_key}",
+            help="Example: AAPL, MSFT, GOOGL",
+        )
+        tickers = [t.strip().upper() for t in custom_tickers_input.split(',') if t.strip()]
+        return universe_option, tickers, None
+
+    if universe_option.startswith("---"):
+        return universe_option, [], None
+
+    # A real market index was selected — resolve it explicitly. If a label is
+    # ever missing from the mapping we surface it rather than silently using US.
+    index_key = UNIVERSE_MAPPING.get(universe_option)
+    if index_key is None:
+        st.error(f"Internal error: no index mapping for '{universe_option}'.")
+    return universe_option, None, index_key
+
+
 def main():
     """Main application function."""
 
@@ -113,64 +273,7 @@ def show_stock_screener():
         )
 
     with col2:
-        universe_option = st.selectbox(
-            "Stock Universe",
-            [
-                "--- Developed Markets (Large Cap) ---",
-                "S&P 500 (USA)",
-                "NASDAQ-100 (USA)",
-                "Dow 30 (USA)",
-                "FTSE 100 (UK)",
-                "DAX (Germany)",
-                "CAC 40 (France)",
-                "Nikkei 225 (Japan)",
-                "ASX 200 (Australia)",
-                "TSX 60 (Canada)",
-                "--- Emerging Markets (Large Cap) ---",
-                "India - NIFTY 50",
-                "India - SENSEX 30",
-                "Brazil - BOVESPA",
-                "China - Hong Kong (HSI)",
-                "China - US ADRs",
-                "South Africa - JSE Top 40",
-                "Mexico - IPC",
-                "Indonesia - IDX",
-                "Vietnam - VN30",
-                "Emerging Markets ADRs (Recommended)",
-                "--- Broader Developed Markets ---",
-                "STOXX Europe 600",
-                "FTSE 250 (UK Mid Cap)",
-                "TOPIX Core 30 (Japan)",
-                "KOSPI 200 (South Korea)",
-                "Taiwan 50",
-                "Straits Times Index (Singapore)",
-                "SMI (Switzerland)",
-                "--- High-Growth Emerging Economies 🚀 ---",
-                "India - NIFTY Next 50",
-                "India - Smallcap 100",
-                "Vietnam - VN100",
-                "Philippines - PSEi",
-                "Thailand - SET50",
-                "Malaysia - KLCI",
-                "Bangladesh - DSE (limited data)",
-                "Egypt - EGX 30",
-                "Saudi Arabia - TASI",
-                "UAE - ADX / DFM",
-                "Turkey - BIST 100",
-                "Poland - WIG 20",
-                "Pakistan - KSE 100 (limited data)",
-                "Growth Markets ADRs (Recommended) 🚀",
-                "--- Hidden Gems (Small/Mid Cap) 💎 ---",
-                "Russell 2000 (US Small Caps)",
-                "India - Mid Caps",
-                "Brazil - Small Caps",
-                "China - Small Cap ADRs",
-                "Emerging Markets Small Caps 🌟",
-                "--- Other ---",
-                "Custom Tickers"
-            ],
-            help="🚀 = High-growth economies (IMF 2026–2030 projections). 💎 = Hidden Gems. ADRs = US-listed, easiest to trade."
-        )
+        universe_option, tickers, index_key = select_universe("screener")
 
     with col3:
         max_stocks = st.number_input(
@@ -181,76 +284,8 @@ def show_stock_screener():
             help="Maximum number of stocks to display"
         )
 
-    # Custom tickers input
-    if universe_option == "Custom Tickers":
-        custom_tickers_input = st.text_input(
-            "Enter ticker symbols (comma-separated)",
-            "AAPL, MSFT, GOOGL, JNJ, PG",
-            help="Example: AAPL, MSFT, GOOGL"
-        )
-        tickers = [t.strip().upper() for t in custom_tickers_input.split(',')]
-        index_key = None
-    elif universe_option.startswith("---"):
-        # Skip separator options
+    if universe_option.startswith("---"):
         st.info("Please select a specific market index from the dropdown.")
-        tickers = []
-        index_key = None
-    else:
-        tickers = None  # Will fetch from index
-        # Map display names to index keys
-        index_mapping = {
-            # Developed Markets
-            "S&P 500 (USA)": "SP500",
-            "NASDAQ-100 (USA)": "NASDAQ100",
-            "Dow 30 (USA)": "DOW30",
-            "FTSE 100 (UK)": "FTSE100",
-            "DAX (Germany)": "DAX",
-            "CAC 40 (France)": "CAC40",
-            "Nikkei 225 (Japan)": "NIKKEI225",
-            "ASX 200 (Australia)": "ASX200",
-            "TSX 60 (Canada)": "TSX60",
-            # Emerging Markets
-            "India - NIFTY 50": "INDIA_NIFTY50",
-            "India - SENSEX 30": "INDIA_SENSEX",
-            "Brazil - BOVESPA": "BRAZIL_BOVESPA",
-            "China - Hong Kong (HSI)": "CHINA_HSI",
-            "China - US ADRs": "CHINA_ADR",
-            "South Africa - JSE Top 40": "SOUTHAFRICA_TOP40",
-            "Mexico - IPC": "MEXICO_IPC",
-            "Indonesia - IDX": "INDONESIA_IDX",
-            "Vietnam - VN30": "VIETNAM_VN30",
-            "Emerging Markets ADRs (Recommended)": "EMERGING_ADR",
-            # Small/Mid Cap Discovery
-            "Russell 2000 (US Small Caps)": "RUSSELL2000",
-            "India - Mid Caps": "INDIA_MIDCAP",
-            "Brazil - Small Caps": "BRAZIL_SMALLCAP",
-            "China - Small Cap ADRs": "CHINA_SMALLCAP",
-            "Emerging Markets Small Caps 🌟": "EMERGING_SMALLCAP",
-            # Broader Developed Markets
-            "STOXX Europe 600": "STOXX600",
-            "FTSE 250 (UK Mid Cap)": "FTSE250",
-            "TOPIX Core 30 (Japan)": "TOPIX_CORE30",
-            "KOSPI 200 (South Korea)": "KOSPI200",
-            "Taiwan 50": "TAIWAN50",
-            "Straits Times Index (Singapore)": "STI_SINGAPORE",
-            "SMI (Switzerland)": "SMI_SWISS",
-            # High-Growth Emerging Economies
-            "India - NIFTY Next 50": "INDIA_NIFTY_NEXT50",
-            "India - Smallcap 100": "INDIA_SMALLCAP100",
-            "Vietnam - VN100": "VIETNAM_VN100",
-            "Philippines - PSEi": "PHILIPPINES_PSEI",
-            "Thailand - SET50": "THAILAND_SET50",
-            "Malaysia - KLCI": "MALAYSIA_KLCI",
-            "Bangladesh - DSE (limited data)": "BANGLADESH_DSE",
-            "Egypt - EGX 30": "EGYPT_EGX30",
-            "Saudi Arabia - TASI": "SAUDI_TASI",
-            "UAE - ADX / DFM": "UAE_ADX_DFM",
-            "Turkey - BIST 100": "TURKEY_BIST100",
-            "Poland - WIG 20": "POLAND_WIG20",
-            "Pakistan - KSE 100 (limited data)": "PAKISTAN_KSE100",
-            "Growth Markets ADRs (Recommended) 🚀": "GROWTH_MARKETS_ADR",
-        }
-        index_key = index_mapping.get(universe_option, "SP500")
 
     # Screen button
     if st.button("🚀 Run Screening", type="primary"):
@@ -406,32 +441,30 @@ def show_portfolio_simulator():
             step=10000
         )
 
-    # Universe selection
-    universe_option = st.selectbox(
-        "Stock Universe",
-        ["S&P 500", "Custom Tickers"]
+    # Universe selection (shared full market picker)
+    universe_option, tickers, index_key = select_universe(
+        "simulator", default_custom="AAPL, MSFT, GOOGL, JNJ, PG, KO, WMT, JPM"
     )
 
-    if universe_option == "Custom Tickers":
-        custom_tickers = st.text_input(
-            "Enter tickers (comma-separated)",
-            "AAPL, MSFT, GOOGL, JNJ, PG, KO, WMT, JPM"
-        )
-        tickers = [t.strip().upper() for t in custom_tickers.split(',')]
-    else:
-        tickers = None
+    if universe_option.startswith("---"):
+        st.info("Please select a specific market index from the dropdown.")
 
     # Simulate button
     if st.button("🎯 Simulate Portfolio", type="primary"):
-        with st.spinner("Running simulation..."):
+        if universe_option.startswith("---"):
+            st.error("Please select a specific market index, not a separator.")
+        elif tickers is not None and len(tickers) == 0:
+            st.error("Please enter at least one ticker symbol.")
+        else:
+          with st.spinner("Running simulation..."):
             # Update simulator capital
             st.session_state.simulator.initial_capital = initial_capital
             st.session_state.simulator.portfolio.initial_capital = initial_capital
             st.session_state.simulator.portfolio.cash = initial_capital
 
-            # Get tickers
+            # Get tickers from the selected market index
             if tickers is None:
-                tickers = st.session_state.data_fetcher.get_sp500_tickers()
+                tickers = st.session_state.data_fetcher.get_index_tickers(index_key)
 
             # Run simulation
             strategy_key = 'defensive' if strategy == "Defensive Investor" else 'enterprising'
@@ -522,15 +555,36 @@ def show_backtesting():
             ["quarterly", "monthly", "annually"]
         )
 
+    # Universe selection (shared full market picker)
+    universe_option, tickers, index_key = select_universe("backtest")
+    max_backtest_stocks = st.number_input(
+        "Max stocks to screen (for performance)",
+        min_value=10,
+        max_value=200,
+        value=50,
+        step=10,
+        help="Backtesting fetches data for every stock at each rebalance date, so large universes can be slow."
+    )
+
+    if universe_option.startswith("---"):
+        st.info("Please select a specific market index from the dropdown.")
+
     # Run backtest
     if st.button("🚀 Run Backtest", type="primary"):
-        with st.spinner("Running backtest... This may take several minutes."):
+        if universe_option.startswith("---"):
+            st.error("Please select a specific market index, not a separator.")
+        elif tickers is not None and len(tickers) == 0:
+            st.error("Please enter at least one ticker symbol.")
+        else:
+          with st.spinner("Running backtest... This may take several minutes."):
             # Update simulator settings
             st.session_state.simulator.initial_capital = initial_capital
             st.session_state.simulator.rebalance_frequency = rebalance_freq
 
-            # Get S&P 500 tickers
-            tickers = st.session_state.data_fetcher.get_sp500_tickers()[:50]  # Limit for demo
+            # Get tickers from the selected market index (capped for performance)
+            if tickers is None:
+                tickers = st.session_state.data_fetcher.get_index_tickers(index_key)
+            tickers = tickers[:int(max_backtest_stocks)]
 
             # Run backtest
             strategy_key = 'defensive' if strategy == "Defensive Investor" else 'enterprising'
