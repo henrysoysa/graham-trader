@@ -340,7 +340,13 @@ class DataFetcher:
             'GROWTH_MARKETS_ADR': self._get_growth_markets_adrs,
         }
 
-        fetcher = index_map.get(index_name, self._get_sp500_tickers)
+        fetcher = index_map.get(index_name)
+        if fetcher is None:
+            logger.warning(
+                f"Unknown index '{index_name}' requested — no matching universe. "
+                f"Falling back to S&P 500 (US). Valid keys: {sorted(index_map)}"
+            )
+            fetcher = self._get_sp500_tickers
         return fetcher()
 
     def get_sp500_tickers(self) -> List[str]:
