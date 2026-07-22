@@ -314,6 +314,30 @@ class DataFetcher:
             'BRAZIL_SMALLCAP': self._get_brazil_smallcap_tickers,
             'CHINA_SMALLCAP': self._get_china_smallcap_adrs,
             'EMERGING_SMALLCAP': self._get_emerging_smallcap_adrs,
+            # Broader Developed Markets
+            'STOXX600': self._get_stoxx600_tickers,
+            'FTSE250': self._get_ftse250_tickers,
+            'TOPIX_CORE30': self._get_topix_core30_tickers,
+            'KOSPI200': self._get_kospi200_tickers,
+            'TAIWAN50': self._get_taiwan50_tickers,
+            'STI_SINGAPORE': self._get_sti_singapore_tickers,
+            'SMI_SWISS': self._get_smi_swiss_tickers,
+            # High-Growth Emerging Economies (per IMF 2026–2030 GDP forecasts)
+            'INDIA_NIFTY_NEXT50': self._get_india_nifty_next50_tickers,
+            'INDIA_SMALLCAP100': self._get_india_smallcap100_tickers,
+            'VIETNAM_VN100': self._get_vietnam_vn100_tickers,
+            'PHILIPPINES_PSEI': self._get_philippines_psei_tickers,
+            'THAILAND_SET50': self._get_thailand_set50_tickers,
+            'MALAYSIA_KLCI': self._get_malaysia_klci_tickers,
+            'BANGLADESH_DSE': self._get_bangladesh_dse_tickers,
+            'EGYPT_EGX30': self._get_egypt_egx30_tickers,
+            'SAUDI_TASI': self._get_saudi_tasi_tickers,
+            'UAE_ADX_DFM': self._get_uae_tickers,
+            'TURKEY_BIST100': self._get_turkey_bist100_tickers,
+            'POLAND_WIG20': self._get_poland_wig20_tickers,
+            'PAKISTAN_KSE100': self._get_pakistan_kse100_tickers,
+            # High-Growth ADRs (US-listed, easiest to trade)
+            'GROWTH_MARKETS_ADR': self._get_growth_markets_adrs,
         }
 
         fetcher = index_map.get(index_name, self._get_sp500_tickers)
@@ -688,6 +712,333 @@ class DataFetcher:
             'SBSW', 'HMY', 'AU', 'AUY',
             # Various
             'FRO', 'STNG', 'DHT', 'NAT'  # Shipping (global trade exposure)
+        ]
+
+    # ========================== BROADER DEVELOPED MARKETS ==========================
+    # These extend beyond blue-chip indices to give the Graham screener a much
+    # deeper universe. yfinance ticker suffixes: .L (LSE), .T (TSE), .KS (KRX),
+    # .TW (TWSE), .SI (SGX), .SW (SIX).
+
+    def _get_stoxx600_tickers(self) -> List[str]:
+        """STOXX Europe 600 — pan-European large/mid cap sample.
+
+        Note: full 600-name list changes frequently; this is a curated
+        representative subset spanning UK, Germany, France, Switzerland,
+        Netherlands, Spain, Italy, Nordics.
+        """
+        logger.info("Using STOXX Europe 600 curated sample")
+        return [
+            # UK (.L)
+            'SHEL.L', 'AZN.L', 'HSBA.L', 'ULVR.L', 'DGE.L', 'GSK.L', 'RIO.L',
+            'BATS.L', 'REL.L', 'BP.L', 'LSEG.L', 'CPG.L', 'NG.L',
+            # Germany (.DE) — SAP & Siemens use ADRs already; here native
+            'SAP.DE', 'SIE.DE', 'ALV.DE', 'DTE.DE', 'MBG.DE', 'BAS.DE',
+            'BAYN.DE', 'MUV2.DE', 'DBK.DE', 'ADS.DE', 'BMW.DE',
+            # France (.PA)
+            'MC.PA', 'OR.PA', 'AIR.PA', 'SAN.PA', 'BNP.PA', 'CS.PA',
+            'RMS.PA', 'SU.PA', 'AI.PA', 'DG.PA', 'KER.PA',
+            # Switzerland (.SW)
+            'NESN.SW', 'ROG.SW', 'NOVN.SW', 'UBSG.SW', 'ZURN.SW', 'ABBN.SW',
+            'CFR.SW', 'GIVN.SW', 'HOLN.SW',
+            # Netherlands (.AS)
+            'ASML.AS', 'HEIA.AS', 'INGA.AS', 'PHIA.AS', 'AD.AS', 'REN.AS',
+            # Spain (.MC)
+            'ITX.MC', 'SAN.MC', 'BBVA.MC', 'IBE.MC', 'REP.MC', 'TEF.MC',
+            # Italy (.MI)
+            'ENI.MI', 'ISP.MI', 'UCG.MI', 'STLAM.MI', 'ENEL.MI', 'G.MI',
+            # Nordics
+            'NOVO-B.CO', 'VOLV-B.ST', 'ATCO-A.ST', 'HM-B.ST', 'ERIC-B.ST',
+            'EQNR.OL', 'NDA-FI.HE', 'NOKIA.HE'
+        ]
+
+    def _get_ftse250_tickers(self) -> List[str]:
+        """FTSE 250 UK mid-cap — sample of well-covered names."""
+        logger.info("Using FTSE 250 UK mid-cap sample")
+        return [
+            'MKS.L', 'ITV.L', 'BAB.L', 'JD.L', 'HSX.L', 'GAW.L', 'HWDN.L',
+            'MRO.L', 'BME.L', 'BYG.L', 'GNS.L', 'IWG.L', 'PSN.L', 'RMV.L',
+            'SPT.L', 'TRN.L', 'WMH.L', 'WIZZ.L', 'DPLM.L', 'GNC.L',
+            'AGR.L', 'HL.L', 'IHG.L', 'JMAT.L', 'MONY.L', 'PAG.L', 'PETS.L',
+            'PLUS.L', 'PNN.L', 'RSW.L', 'SGRO.L', 'SVS.L', 'TATE.L'
+        ]
+
+    def _get_topix_core30_tickers(self) -> List[str]:
+        """TOPIX Core 30 — Japan's 30 most liquid names on TSE (.T suffix)."""
+        logger.info("Using TOPIX Core 30 (Japan large caps, .T suffix)")
+        return [
+            '7203.T', '6758.T', '9432.T', '8306.T', '9984.T', '6098.T',
+            '6861.T', '7974.T', '8035.T', '9433.T', '6902.T', '4063.T',
+            '8316.T', '8058.T', '8031.T', '8001.T', '6501.T', '7267.T',
+            '4502.T', '4568.T', '4519.T', '4661.T', '6367.T', '6594.T',
+            '6981.T', '7751.T', '9022.T', '9020.T', '9613.T', '9503.T'
+        ]
+
+    def _get_kospi200_tickers(self) -> List[str]:
+        """KOSPI 200 — South Korea top 200 by liquidity (.KS suffix)."""
+        logger.info("Using KOSPI 200 sample (South Korea, .KS suffix)")
+        return [
+            '005930.KS', '000660.KS', '373220.KS', '207940.KS', '005380.KS',
+            '005490.KS', '051910.KS', '006400.KS', '035420.KS', '028260.KS',
+            '000270.KS', '068270.KS', '035720.KS', '105560.KS', '055550.KS',
+            '012330.KS', '096770.KS', '017670.KS', '032830.KS', '015760.KS',
+            '003550.KS', '033780.KS', '018260.KS', '316140.KS', '011200.KS',
+            '086790.KS', '009150.KS', '090430.KS', '024110.KS', '036570.KS'
+        ]
+
+    def _get_taiwan50_tickers(self) -> List[str]:
+        """Taiwan 50 — top 50 TWSE names (.TW suffix)."""
+        logger.info("Using Taiwan 50 sample (.TW suffix)")
+        return [
+            '2330.TW', '2317.TW', '2454.TW', '2308.TW', '2412.TW', '2891.TW',
+            '2882.TW', '3711.TW', '2382.TW', '1301.TW', '1303.TW', '2881.TW',
+            '2886.TW', '2884.TW', '2885.TW', '1216.TW', '2002.TW', '2207.TW',
+            '2303.TW', '2357.TW', '3008.TW', '2379.TW', '2409.TW', '3045.TW',
+            '2892.TW', '5871.TW', '2880.TW', '2887.TW', '1101.TW', '2105.TW'
+        ]
+
+    def _get_sti_singapore_tickers(self) -> List[str]:
+        """Straits Times Index — Singapore's 30 largest (.SI suffix)."""
+        logger.info("Using Straits Times Index (Singapore, .SI suffix)")
+        return [
+            'D05.SI', 'O39.SI', 'U11.SI', 'Z74.SI', 'C6L.SI', 'F34.SI',
+            'S68.SI', 'C31.SI', 'C09.SI', 'BN4.SI', 'G13.SI', 'V03.SI',
+            'S63.SI', 'U96.SI', 'S58.SI', 'BS6.SI', 'H78.SI', 'C38U.SI',
+            'A17U.SI', 'ME8U.SI', 'M44U.SI', 'AJBU.SI', 'CJLU.SI', 'J36.SI',
+            'J37.SI', 'Y92.SI', 'U14.SI', 'C07.SI', 'N2IU.SI', 'C52.SI'
+        ]
+
+    def _get_smi_swiss_tickers(self) -> List[str]:
+        """Swiss Market Index — Switzerland's 20 largest (.SW suffix)."""
+        logger.info("Using SMI (Swiss Market Index, .SW suffix)")
+        return [
+            'NESN.SW', 'ROG.SW', 'NOVN.SW', 'UBSG.SW', 'ZURN.SW', 'ABBN.SW',
+            'CFR.SW', 'GIVN.SW', 'HOLN.SW', 'SIKA.SW', 'LONN.SW', 'SREN.SW',
+            'ALC.SW', 'GEBN.SW', 'PGHN.SW', 'SCMN.SW', 'SLHN.SW', 'LOGN.SW',
+            'KNIN.SW', 'SGSN.SW'
+        ]
+
+    # ==================== HIGH-GROWTH EMERGING ECONOMIES ====================
+    # Focus: countries projected by IMF (2026–2030) to see above-average GDP
+    # growth — India, Vietnam, Philippines, Bangladesh, Indonesia, Egypt,
+    # Saudi Arabia (Vision 2030), UAE, Turkey, Poland, Malaysia, Pakistan.
+
+    def _get_india_nifty_next50_tickers(self) -> List[str]:
+        """NIFTY Next 50 — the tier below NIFTY 50 (.NS suffix).
+
+        This is where India's next generation of blue chips is emerging;
+        arguably the highest-signal growth-value universe on the planet.
+        """
+        logger.info("Using India NIFTY Next 50 (.NS suffix)")
+        return [
+            'ADANIENSOL.NS', 'ADANIGREEN.NS', 'ADANIPOWER.NS', 'AMBUJACEM.NS',
+            'ATGL.NS', 'BAJAJHLDNG.NS', 'BANKBARODA.NS', 'BERGEPAINT.NS',
+            'BOSCHLTD.NS', 'CANBK.NS', 'CGPOWER.NS', 'CHOLAFIN.NS', 'COLPAL.NS',
+            'DABUR.NS', 'DLF.NS', 'DMART.NS', 'GAIL.NS', 'GODREJCP.NS',
+            'HAL.NS', 'HAVELLS.NS', 'ICICIGI.NS', 'ICICIPRULI.NS', 'INDIGO.NS',
+            'IOC.NS', 'IRCTC.NS', 'JINDALSTEL.NS', 'JIOFIN.NS', 'LICI.NS',
+            'MARICO.NS', 'MOTHERSON.NS', 'NAUKRI.NS', 'PFC.NS', 'PIDILITIND.NS',
+            'PNB.NS', 'RECLTD.NS', 'SAIL.NS', 'SIEMENS.NS', 'SRF.NS',
+            'SUNTV.NS', 'TATAPOWER.NS', 'TORNTPHARM.NS', 'TRENT.NS',
+            'TVSMOTOR.NS', 'UNITDSPR.NS', 'VBL.NS', 'VEDL.NS', 'ZOMATO.NS',
+            'ZYDUSLIFE.NS'
+        ]
+
+    def _get_india_smallcap100_tickers(self) -> List[str]:
+        """NIFTY Smallcap 100 sample — India small caps (.NS suffix).
+
+        Where classic Graham candidates hide in a fast-growing economy.
+        """
+        logger.info("Using India Smallcap 100 sample (.NS suffix)")
+        return [
+            'AAVAS.NS', 'AEGISCHEM.NS', 'AFFLE.NS', 'AJANTPHARM.NS',
+            'AMBER.NS', 'ANURAS.NS', 'APLLTD.NS', 'ASTERDM.NS', 'BALRAMCHIN.NS',
+            'BEML.NS', 'BIRLACORPN.NS', 'BLUESTARCO.NS', 'BSOFT.NS', 'CAMS.NS',
+            'CANFINHOME.NS', 'CARBORUNIV.NS', 'CDSL.NS', 'CENTURYTEX.NS',
+            'CERA.NS', 'CHAMBLFERT.NS', 'CHENNPETRO.NS', 'CROMPTON.NS',
+            'CUB.NS', 'CYIENT.NS', 'DEEPAKFERT.NS', 'DEVYANI.NS', 'ECLERX.NS',
+            'ENGINERSIN.NS', 'EQUITASBNK.NS', 'FINCABLES.NS', 'FINPIPE.NS',
+            'FSL.NS', 'GESHIP.NS', 'GLENMARK.NS', 'GRAPHITE.NS', 'GUJGASLTD.NS',
+            'HFCL.NS', 'HINDCOPPER.NS', 'IDBI.NS', 'IIFL.NS', 'INDIAMART.NS',
+            'IRB.NS', 'JBCHEPHARM.NS', 'JKCEMENT.NS', 'JYOTHYLAB.NS',
+            'KEC.NS', 'KEI.NS', 'KIRLOSENG.NS', 'LTF.NS', 'MASTEK.NS'
+        ]
+
+    def _get_vietnam_vn100_tickers(self) -> List[str]:
+        """Vietnam VN100 — broader than VN30.
+
+        Note: yfinance coverage for direct HOSE tickers is patchy; symbols
+        listed here are the ones with the best availability. For reliable
+        Vietnam exposure, consider VNM (US-listed Vietnam ETF ADR).
+        """
+        logger.info("Using Vietnam VN100 sample (data availability varies)")
+        return [
+            'VNM.VN', 'VIC.VN', 'VHM.VN', 'GAS.VN', 'TCB.VN', 'BID.VN',
+            'CTG.VN', 'VCB.VN', 'HPG.VN', 'MSN.VN', 'VPB.VN', 'PLX.VN',
+            'POW.VN', 'SAB.VN', 'MWG.VN', 'VRE.VN', 'FPT.VN', 'GVR.VN',
+            'VJC.VN', 'HVN.VN', 'STB.VN', 'BVH.VN', 'SSI.VN', 'PDR.VN',
+            'HDB.VN', 'ACB.VN', 'MBB.VN', 'TPB.VN', 'VIB.VN', 'SHB.VN',
+            'DGC.VN', 'DPM.VN', 'PVD.VN', 'PVS.VN', 'BSR.VN'
+        ]
+
+    def _get_philippines_psei_tickers(self) -> List[str]:
+        """Philippine Stock Exchange PSEi — top 30 (.PS suffix)."""
+        logger.info("Using Philippines PSEi 30 (.PS suffix)")
+        return [
+            'SM.PS', 'BDO.PS', 'ALI.PS', 'BPI.PS', 'AC.PS', 'JGS.PS',
+            'AEV.PS', 'JFC.PS', 'MBT.PS', 'SMPH.PS', 'ICT.PS', 'URC.PS',
+            'TEL.PS', 'GLO.PS', 'MER.PS', 'MPI.PS', 'RLC.PS', 'GTCAP.PS',
+            'AGI.PS', 'DMC.PS', 'SCC.PS', 'FGEN.PS', 'PGOLD.PS', 'MEG.PS',
+            'CNVRG.PS', 'CNPF.PS', 'MONDE.PS', 'BLOOM.PS', 'AP.PS', 'WLCON.PS'
+        ]
+
+    def _get_thailand_set50_tickers(self) -> List[str]:
+        """Thailand SET50 — top 50 on Stock Exchange of Thailand (.BK suffix)."""
+        logger.info("Using Thailand SET50 sample (.BK suffix)")
+        return [
+            'PTT.BK', 'AOT.BK', 'CPALL.BK', 'ADVANC.BK', 'GULF.BK', 'DELTA.BK',
+            'PTTEP.BK', 'BDMS.BK', 'SCB.BK', 'KBANK.BK', 'BBL.BK', 'KTB.BK',
+            'CPN.BK', 'CPF.BK', 'TRUE.BK', 'INTUCH.BK', 'EA.BK', 'HMPRO.BK',
+            'LH.BK', 'MINT.BK', 'BH.BK', 'IVL.BK', 'GPSC.BK', 'BEM.BK',
+            'BTS.BK', 'TU.BK', 'OSP.BK', 'TISCO.BK', 'RATCH.BK', 'BJC.BK'
+        ]
+
+    def _get_malaysia_klci_tickers(self) -> List[str]:
+        """Malaysia KLCI — FTSE Bursa Malaysia Top 30 (.KL suffix)."""
+        logger.info("Using Malaysia KLCI 30 (.KL suffix)")
+        return [
+            '1155.KL', '5347.KL', '1023.KL', '5225.KL', '6033.KL', '1295.KL',
+            '5285.KL', '1961.KL', '4707.KL', '6888.KL', '4197.KL', '3816.KL',
+            '4863.KL', '1082.KL', '5183.KL', '5296.KL', '6012.KL', '5168.KL',
+            '5819.KL', '3182.KL', '2445.KL', '5099.KL', '8869.KL', '4715.KL',
+            '5681.KL', '4197.KL', '1066.KL', '5398.KL'
+        ]
+
+    def _get_bangladesh_dse_tickers(self) -> List[str]:
+        """Bangladesh DSE — top names.
+
+        Note: yfinance coverage for Bangladesh (.DH) is very limited.
+        Included for completeness; expect many symbols to return no data.
+        For reliable Bangladesh exposure, use frontier-market ETFs (FM, FRN).
+        """
+        logger.info("Using Bangladesh DSE sample (LIMITED yfinance coverage)")
+        return [
+            'GP.DH', 'BATBC.DH', 'SQURPHARMA.DH', 'ROBI.DH', 'BXPHARMA.DH',
+            'BEXIMCO.DH', 'RENATA.DH', 'MARICO.DH', 'BRACBANK.DH', 'DBBL.DH',
+            'CITYBANK.DH', 'EBL.DH', 'PUBALIBANK.DH', 'UTTARABANK.DH'
+        ]
+
+    def _get_egypt_egx30_tickers(self) -> List[str]:
+        """Egypt EGX 30 — top 30 on Egyptian Exchange (.CA suffix).
+
+        Note: yfinance .CA coverage varies; some names may be sparse.
+        """
+        logger.info("Using Egypt EGX 30 (.CA suffix, coverage varies)")
+        return [
+            'COMI.CA', 'HRHO.CA', 'EAST.CA', 'ETEL.CA', 'EFIH.CA', 'ORWE.CA',
+            'SWDY.CA', 'MNHD.CA', 'PHDC.CA', 'AMOC.CA', 'JUFO.CA', 'ALCN.CA',
+            'ORAS.CA', 'ESRS.CA', 'ABUK.CA', 'CIEB.CA', 'ADIB.CA', 'CIRA.CA',
+            'FWRY.CA', 'ISPH.CA', 'MFPC.CA', 'MASR.CA', 'PHAR.CA', 'RMDA.CA',
+            'ADPC.CA', 'CANA.CA', 'CLHO.CA', 'CSAG.CA', 'EGCH.CA', 'EGTS.CA'
+        ]
+
+    def _get_saudi_tasi_tickers(self) -> List[str]:
+        """Saudi Tadawul TASI — top Saudi names (.SR suffix).
+
+        Vision 2030 has driven significant reforms; Aramco IPO opened
+        the market to global investors.
+        """
+        logger.info("Using Saudi TASI top names (.SR suffix)")
+        return [
+            '2222.SR', '2010.SR', '1120.SR', '1180.SR', '7010.SR', '1211.SR',
+            '2020.SR', '2280.SR', '1150.SR', '1050.SR', '1140.SR', '2350.SR',
+            '4030.SR', '5110.SR', '4002.SR', '4190.SR', '4240.SR', '4200.SR',
+            '2380.SR', '1010.SR', '1080.SR', '1060.SR', '2290.SR', '2040.SR',
+            '4001.SR', '4090.SR', '4260.SR', '4322.SR', '3030.SR', '3040.SR'
+        ]
+
+    def _get_uae_tickers(self) -> List[str]:
+        """UAE — Abu Dhabi (.AE) and Dubai (.DU) top names."""
+        logger.info("Using UAE ADX/DFM top names (.AE / .DU suffix)")
+        return [
+            # Abu Dhabi (ADX)
+            'IHC.AE', 'FAB.AE', 'ADCB.AE', 'ETISALAT.AE', 'ADNOCDIST.AE',
+            'ALDAR.AE', 'MULTIPLY.AE', 'BOROUGE.AE', 'ADNOCGAS.AE',
+            'PUREHEALTH.AE', 'TAQA.AE', 'AGTHIA.AE', 'ADIB.AE',
+            # Dubai (DFM)
+            'EMAAR.DU', 'EMIRATESNBD.DU', 'DEWA.DU', 'DIB.DU', 'SALIK.DU',
+            'DFM.DU', 'DAMAC.DU', 'AMLAK.DU', 'MASHREQ.DU', 'ARMX.DU'
+        ]
+
+    def _get_turkey_bist100_tickers(self) -> List[str]:
+        """Turkey BIST 100 — top Borsa Istanbul names (.IS suffix)."""
+        logger.info("Using Turkey BIST 100 sample (.IS suffix)")
+        return [
+            'AKBNK.IS', 'ARCLK.IS', 'ASELS.IS', 'BIMAS.IS', 'EKGYO.IS',
+            'EREGL.IS', 'FROTO.IS', 'GARAN.IS', 'HALKB.IS', 'ISCTR.IS',
+            'KCHOL.IS', 'KOZAA.IS', 'KOZAL.IS', 'KRDMD.IS', 'PETKM.IS',
+            'PGSUS.IS', 'SAHOL.IS', 'SASA.IS', 'SISE.IS', 'TAVHL.IS',
+            'TCELL.IS', 'THYAO.IS', 'TOASO.IS', 'TSKB.IS', 'TUPRS.IS',
+            'VAKBN.IS', 'VESTL.IS', 'YKBNK.IS', 'ENKAI.IS', 'MGROS.IS'
+        ]
+
+    def _get_poland_wig20_tickers(self) -> List[str]:
+        """Poland WIG20 — Warsaw Stock Exchange top 20 (.WA suffix)."""
+        logger.info("Using Poland WIG20 (.WA suffix)")
+        return [
+            'PKO.WA', 'PZU.WA', 'PKN.WA', 'PEO.WA', 'ALE.WA', 'DNP.WA',
+            'CPS.WA', 'CDR.WA', 'LPP.WA', 'KGH.WA', 'PGE.WA', 'JSW.WA',
+            'ORLEN.WA', 'CCC.WA', 'MBK.WA', 'ALR.WA', 'OPL.WA', 'ACP.WA',
+            'ATT.WA', 'SPL.WA'
+        ]
+
+    def _get_pakistan_kse100_tickers(self) -> List[str]:
+        """Pakistan KSE 100 — top Karachi names.
+
+        Note: yfinance coverage for Pakistan is limited; expect gaps.
+        """
+        logger.info("Using Pakistan KSE 100 sample (coverage limited)")
+        return [
+            'OGDC.KA', 'PPL.KA', 'MCB.KA', 'HBL.KA', 'UBL.KA', 'ENGRO.KA',
+            'LUCK.KA', 'FFC.KA', 'HUBC.KA', 'PSO.KA', 'MARI.KA', 'NBP.KA',
+            'BAHL.KA', 'MEBL.KA', 'PAKT.KA', 'DGKC.KA', 'FCCL.KA', 'INDU.KA'
+        ]
+
+    def _get_growth_markets_adrs(self) -> List[str]:
+        """Curated US-listed ADRs from high-growth economies.
+
+        Easiest way to gain growth-market exposure without dealing with
+        foreign exchange settlement, custody, or thin liquidity.
+        Covers: India, Vietnam, Indonesia, Philippines, Egypt, Turkey,
+        Saudi Arabia (via ETF), Argentina, plus growth-adjacent LatAm.
+        """
+        logger.info("Using high-growth-economy ADRs (US-listed)")
+        return [
+            # India
+            'INFY', 'WIT', 'HDB', 'IBN', 'RDY', 'TTM', 'MMYT', 'AZRE',
+            # Vietnam (ETF only — no single-stock ADRs)
+            'VNM',
+            # Indonesia (ETF + ADR)
+            'EIDO', 'TLK',
+            # Philippines (ETF)
+            'EPHE',
+            # Egypt & MENA
+            'EGPT', 'MES',
+            # Turkey
+            'TUR', 'TKC',
+            # Saudi Arabia (ETF)
+            'KSA',
+            # UAE / Gulf (ETF)
+            'UAE', 'GULF',
+            # Argentina (high growth potential post-reform)
+            'YPF', 'BMA', 'GGAL', 'PAM', 'TEO', 'CEPU', 'IRS',
+            # Poland
+            'PLND',
+            # Frontier markets (ETFs — captures Bangladesh, Kenya, Nigeria, etc.)
+            'FM', 'FRN',
+            # LatAm growth-adjacent (Peru, Chile, Colombia)
+            'EPU', 'ECH', 'GXG', 'BAP', 'SQM', 'EC',
+            # Africa broad (beyond South Africa)
+            'AFK',
         ]
 
     def calculate_graham_number(self, ticker: str) -> Dict[str, float]:
