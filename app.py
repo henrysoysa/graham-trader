@@ -137,6 +137,29 @@ def show_stock_screener():
                 "Indonesia - IDX",
                 "Vietnam - VN30",
                 "Emerging Markets ADRs (Recommended)",
+                "--- Broader Developed Markets ---",
+                "STOXX Europe 600",
+                "FTSE 250 (UK Mid Cap)",
+                "TOPIX Core 30 (Japan)",
+                "KOSPI 200 (South Korea)",
+                "Taiwan 50",
+                "Straits Times Index (Singapore)",
+                "SMI (Switzerland)",
+                "--- High-Growth Emerging Economies 🚀 ---",
+                "India - NIFTY Next 50",
+                "India - Smallcap 100",
+                "Vietnam - VN100",
+                "Philippines - PSEi",
+                "Thailand - SET50",
+                "Malaysia - KLCI",
+                "Bangladesh - DSE (limited data)",
+                "Egypt - EGX 30",
+                "Saudi Arabia - TASI",
+                "UAE - ADX / DFM",
+                "Turkey - BIST 100",
+                "Poland - WIG 20",
+                "Pakistan - KSE 100 (limited data)",
+                "Growth Markets ADRs (Recommended) 🚀",
                 "--- Hidden Gems (Small/Mid Cap) 💎 ---",
                 "Russell 2000 (US Small Caps)",
                 "India - Mid Caps",
@@ -146,7 +169,7 @@ def show_stock_screener():
                 "--- Other ---",
                 "Custom Tickers"
             ],
-            help="💎 = Hidden Gems sections for finding overlooked opportunities. ADRs = US-listed, easiest to trade."
+            help="🚀 = High-growth economies (IMF 2026–2030 projections). 💎 = Hidden Gems. ADRs = US-listed, easiest to trade."
         )
 
     with col3:
@@ -203,6 +226,29 @@ def show_stock_screener():
             "Brazil - Small Caps": "BRAZIL_SMALLCAP",
             "China - Small Cap ADRs": "CHINA_SMALLCAP",
             "Emerging Markets Small Caps 🌟": "EMERGING_SMALLCAP",
+            # Broader Developed Markets
+            "STOXX Europe 600": "STOXX600",
+            "FTSE 250 (UK Mid Cap)": "FTSE250",
+            "TOPIX Core 30 (Japan)": "TOPIX_CORE30",
+            "KOSPI 200 (South Korea)": "KOSPI200",
+            "Taiwan 50": "TAIWAN50",
+            "Straits Times Index (Singapore)": "STI_SINGAPORE",
+            "SMI (Switzerland)": "SMI_SWISS",
+            # High-Growth Emerging Economies
+            "India - NIFTY Next 50": "INDIA_NIFTY_NEXT50",
+            "India - Smallcap 100": "INDIA_SMALLCAP100",
+            "Vietnam - VN100": "VIETNAM_VN100",
+            "Philippines - PSEi": "PHILIPPINES_PSEI",
+            "Thailand - SET50": "THAILAND_SET50",
+            "Malaysia - KLCI": "MALAYSIA_KLCI",
+            "Bangladesh - DSE (limited data)": "BANGLADESH_DSE",
+            "Egypt - EGX 30": "EGYPT_EGX30",
+            "Saudi Arabia - TASI": "SAUDI_TASI",
+            "UAE - ADX / DFM": "UAE_ADX_DFM",
+            "Turkey - BIST 100": "TURKEY_BIST100",
+            "Poland - WIG 20": "POLAND_WIG20",
+            "Pakistan - KSE 100 (limited data)": "PAKISTAN_KSE100",
+            "Growth Markets ADRs (Recommended) 🚀": "GROWTH_MARKETS_ADR",
         }
         index_key = index_mapping.get(universe_option, "SP500")
 
