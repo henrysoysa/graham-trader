@@ -213,13 +213,27 @@ class GrahamScreener:
         else:
             result['graham_multiplier_check'] = False
 
+        # 9. Margin of safety vs Graham Number — core Graham principle.
+        # Only meaningful when Graham Number could be computed (EPS > 0, BV > 0).
+        max_score = 9
+        min_mos = criteria.get('margin_of_safety', 0.20)
+        if result['graham_number'] > 0 and result['margin_of_safety'] >= min_mos:
+            total_score += 1
+            result['margin_of_safety_check'] = True
+        else:
+            result['margin_of_safety_check'] = False
+
         result['pe_pb_product'] = pe_pb_product
         result['total_score'] = total_score
         result['max_score'] = max_score
         result['pass_percentage'] = (total_score / max_score) * 100
 
-        # Overall pass: need at least 5/8 criteria (62.5%) - adjusted for modern markets
-        result['passes_screening'] = total_score >= 5
+        # Overall pass: need 6/9 criteria AND a positive margin of safety.
+        # Without the MoS gate, stocks trading well above intrinsic value can
+        # still pass on other metrics — defeating the point of value screening.
+        result['passes_screening'] = (
+            total_score >= 6 and result['margin_of_safety_check']
+        )
 
         return result
 
@@ -290,10 +304,22 @@ class GrahamScreener:
         else:
             result['pb_check'] = False
 
+        # 6. Margin of safety vs Graham Number — core Graham principle.
+        max_score = 6
+        min_mos = criteria.get('margin_of_safety', 0.15)
+        if result['graham_number'] > 0 and result['margin_of_safety'] >= min_mos:
+            total_score += 1
+            result['margin_of_safety_check'] = True
+        else:
+            result['margin_of_safety_check'] = False
+
         result['total_score'] = total_score
         result['max_score'] = max_score
         result['pass_percentage'] = (total_score / max_score) * 100
-        result['passes_screening'] = total_score >= 4  # 80%
+        # Require MoS gate — enterprising investors still demand a discount.
+        result['passes_screening'] = (
+            total_score >= 5 and result['margin_of_safety_check']
+        )
 
         return result
 
