@@ -19,3 +19,6 @@ beautifulsoup4>=4.12.0
 
 # Data storage (optional)
 sqlalchemy>=2.0.0
+
+# Testing (dev)
+pytest>=8.0.0
