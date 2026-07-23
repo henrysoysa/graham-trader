@@ -7,6 +7,7 @@ Includes:
 - Defensive Investor criteria
 - Enterprising Investor criteria
 """
+import copy
 import pandas as pd
 import numpy as np
 from typing import List, Dict, Optional
@@ -15,6 +16,34 @@ import logging
 from ..data.data_fetcher import DataFetcher
 
 logger = logging.getLogger(__name__)
+
+# Fallback criteria, used only if the project-level ``config`` module cannot be
+# imported. These MUST mirror ``config.GRAHAM_CRITERIA`` (modernised thresholds)
+# so behaviour is identical whether or not a config is supplied.
+_FALLBACK_CRITERIA = {
+    'defensive': {
+        'min_earnings_stability': 10,
+        'min_dividend_history': 10,
+        'min_earnings_growth': 0.33,
+        'max_pe_ratio': 25,
+        'max_pb_ratio': 4.0,
+        'min_current_ratio': 1.2,
+        'max_debt_to_current_assets': 1.5,
+        'margin_of_safety': 0.20,
+    },
+    'enterprising': {
+        'min_earnings_stability': 5,
+        'max_pe_ratio': 35,
+        'max_pb_ratio': 5.0,
+        'min_current_ratio': 1.0,
+        'margin_of_safety': 0.15,
+    },
+    'graham_number': {
+        'eps_multiplier': 15,
+        'book_value_multiplier': 1.5,
+        'max_multiplier': 22.5,
+    },
+}
 
 
 class GrahamScreener:
@@ -34,26 +63,18 @@ class GrahamScreener:
         self.criteria = criteria_config or self._default_criteria()
 
     def _default_criteria(self) -> Dict:
-        """Return default Graham criteria."""
-        return {
-            'defensive': {
-                'min_earnings_stability': 10,
-                'min_dividend_history': 20,
-                'min_earnings_growth': 0.33,
-                'max_pe_ratio': 15,
-                'max_pb_ratio': 1.5,
-                'min_current_ratio': 2.0,
-                'max_debt_to_current_assets': 1.1,
-                'margin_of_safety': 0.33,
-            },
-            'enterprising': {
-                'min_earnings_stability': 5,
-                'max_pe_ratio': 25,
-                'max_pb_ratio': 2.5,
-                'min_current_ratio': 1.5,
-                'margin_of_safety': 0.25,
-            }
-        }
+        """Return default Graham criteria.
+
+        Single source of truth is ``config.GRAHAM_CRITERIA`` so the strict and
+        modernised thresholds can never silently diverge. If that module is not
+        importable we fall back to an identical inline copy.
+        """
+        try:
+            import config
+            return copy.deepcopy(config.GRAHAM_CRITERIA)
+        except Exception:
+            logger.warning("config.GRAHAM_CRITERIA unavailable; using inline fallback criteria")
+            return copy.deepcopy(_FALLBACK_CRITERIA)
 
     def screen_defensive(self, tickers: List[str]) -> pd.DataFrame:
         """
@@ -121,6 +142,57 @@ class GrahamScreener:
 
         return df
 
+    def _earnings_history_eps(self, ticker: str) -> Optional[pd.Series]:
+        """Return a chronological (oldest→newest) EPS series, or None.
+
+        Wraps DataFetcher.get_earnings_history and normalises ordering so the
+        stability/growth checks don't depend on the source's row order.
+        """
+        try:
+            hist = self.data_fetcher.get_earnings_history(ticker)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"earnings history unavailable for {ticker}: {e}")
+            return None
+        if hist is None or getattr(hist, 'empty', True) or 'EPS' not in getattr(hist, 'columns', []):
+            return None
+        eps = hist['EPS'].dropna().sort_index()
+        return eps if len(eps) >= 1 else None
+
+    def _earnings_stability_ok(self, ticker: str, min_years: int, current_eps: float) -> bool:
+        """Earnings stability = no annual losses across available history.
+
+        Graham asked for ``min_years`` of positive earnings. yfinance rarely
+        provides more than ~4 years of statements, so we verify that every year
+        we *can* see is positive (a real multi-year check when data allows) and
+        fall back to the trailing-EPS sign when no history is available — the
+        latter keeps sparsely-covered non-US names from being auto-failed on a
+        data gap rather than on fundamentals.
+        """
+        eps = self._earnings_history_eps(ticker)
+        if eps is not None:
+            return bool((eps > 0).all())
+        return bool(current_eps is not None and current_eps > 0)
+
+    def _earnings_growth_ok(self, ticker: str, min_total_growth_10y: float, current_growth: float) -> bool:
+        """Earnings growth vs Graham's target (default 33% over 10 years).
+
+        Computes annualised EPS growth from available history and compares to
+        the annualised equivalent of the 10-year target. Falls back to the
+        trailing earnings-growth figure when history is too short.
+        """
+        eps = self._earnings_history_eps(ticker)
+        if eps is not None and len(eps) >= 2:
+            oldest = float(eps.iloc[0])
+            newest = float(eps.iloc[-1])
+            years = max(len(eps) - 1, 1)
+            if oldest > 0 and newest > 0:
+                annualised = (newest / oldest) ** (1.0 / years) - 1.0
+                target_annualised = (1.0 + min_total_growth_10y) ** (1.0 / 10.0) - 1.0
+                return bool(annualised >= target_annualised)
+            # Sign change (loss→profit or profit→loss): use direction.
+            return bool(newest > oldest)
+        return bool(current_growth is not None and current_growth > 0)
+
     def _evaluate_defensive(self, ticker: str) -> Optional[Dict]:
         """
         Evaluate a stock against defensive investor criteria.
@@ -177,8 +249,11 @@ class GrahamScreener:
         else:
             result['debt_check'] = False
 
-        # 4. Earnings stability (simplified - check if EPS is positive)
-        if result['eps'] > 0:
+        # 4. Earnings stability — no annual losses across available history
+        #    (falls back to trailing-EPS sign when history is unavailable).
+        if self._earnings_stability_ok(
+            ticker, criteria.get('min_earnings_stability', 10), result['eps']
+        ):
             total_score += 1
             result['earnings_stability_check'] = True
         else:
@@ -213,9 +288,20 @@ class GrahamScreener:
         else:
             result['graham_multiplier_check'] = False
 
-        # 9. Margin of safety vs Graham Number — core Graham principle.
+        # 9. Earnings growth vs Graham's target (default 33% over 10 years).
+        if self._earnings_growth_ok(
+            ticker,
+            criteria.get('min_earnings_growth', 0.33),
+            metrics.get('earnings_growth', 0),
+        ):
+            total_score += 1
+            result['earnings_growth_check'] = True
+        else:
+            result['earnings_growth_check'] = False
+
+        # 10. Margin of safety vs Graham Number — core Graham principle.
         # Only meaningful when Graham Number could be computed (EPS > 0, BV > 0).
-        max_score = 9
+        max_score = 10
         min_mos = criteria.get('margin_of_safety', 0.20)
         if result['graham_number'] > 0 and result['margin_of_safety'] >= min_mos:
             total_score += 1
@@ -228,11 +314,11 @@ class GrahamScreener:
         result['max_score'] = max_score
         result['pass_percentage'] = (total_score / max_score) * 100
 
-        # Overall pass: need 6/9 criteria AND a positive margin of safety.
+        # Overall pass: need 7/10 criteria AND a positive margin of safety.
         # Without the MoS gate, stocks trading well above intrinsic value can
         # still pass on other metrics — defeating the point of value screening.
         result['passes_screening'] = (
-            total_score >= 6 and result['margin_of_safety_check']
+            total_score >= 7 and result['margin_of_safety_check']
         )
 
         return result
@@ -283,8 +369,11 @@ class GrahamScreener:
         else:
             result['financial_condition_check'] = False
 
-        # 3. Positive earnings
-        if result['eps'] > 0:
+        # 3. Earnings stability — no annual losses across available history
+        #    (falls back to trailing-EPS sign when history is unavailable).
+        if self._earnings_stability_ok(
+            ticker, criteria.get('min_earnings_stability', 5), result['eps']
+        ):
             total_score += 1
             result['earnings_check'] = True
         else:
