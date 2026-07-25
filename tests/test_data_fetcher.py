@@ -48,3 +48,47 @@ def test_unknown_key_warns_and_falls_back(fetcher, caplog):
 
 def test_legacy_sp500_helper_still_works(fetcher):
     assert fetcher.get_sp500_tickers() == fetcher.get_index_tickers("SP500")
+
+
+def test_sp500_fetches_full_live_list(fetcher, monkeypatch):
+    """When a live source is reachable, the full ~500 constituents are used
+    (and class-suffix tickers are normalised, e.g. BRK.B -> BRK-B)."""
+    import requests
+
+    symbols = [f"SYM{i}" for i in range(500)]
+    symbols[0] = "BRK.B"
+    csv_text = "Symbol,Name\n" + "\n".join(f"{s},Example Corp" for s in symbols)
+
+    class _Resp:
+        def __init__(self, text, ok=True):
+            self.text = text
+            self._ok = ok
+
+        def raise_for_status(self):
+            if not self._ok:
+                raise RuntimeError("blocked")
+
+    def fake_get(url, *args, **kwargs):
+        # Simulate Wikipedia being blocked; the CSV secondary source succeeds.
+        if "wikipedia" in url:
+            return _Resp("", ok=False)
+        return _Resp(csv_text)
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    tickers = fetcher._get_sp500_tickers()
+    assert len(tickers) >= 400
+    assert "BRK-B" in tickers
+    assert "BRK.B" not in tickers
+
+
+def test_sp500_falls_back_when_live_sources_fail(fetcher, monkeypatch):
+    """If every live source fails, we still return the curated ~90 majors."""
+    import requests
+
+    def fail_get(*args, **kwargs):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr(requests, "get", fail_get)
+    tickers = fetcher._get_sp500_tickers()
+    assert "AAPL" in tickers
+    assert 50 <= len(tickers) <= 130  # the curated fallback, not the full index

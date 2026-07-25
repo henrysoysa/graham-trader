@@ -276,17 +276,10 @@ class DataFetcher:
             logger.error(f"Error fetching dividend history for {ticker}: {e}")
             return pd.DataFrame()
 
-    def get_index_tickers(self, index_name: str = 'SP500') -> List[str]:
-        """
-        Get list of tickers for various stock market indexes.
-
-        Args:
-            index_name: Name of the index (SP500, NASDAQ100, DOW30, FTSE100, DAX, CAC40, NIKKEI225, ASX200, TSX60)
-
-        Returns:
-            List of ticker symbols
-        """
-        index_map = {
+    def _index_fetcher_map(self) -> Dict[str, Any]:
+        """Map of index key -> curated-list fetcher method (the fallback used
+        when a key has no live source, or its live source fails)."""
+        return {
             # Developed Markets
             'SP500': self._get_sp500_tickers,
             'NASDAQ100': self._get_nasdaq100_tickers,
@@ -340,14 +333,43 @@ class DataFetcher:
             'GROWTH_MARKETS_ADR': self._get_growth_markets_adrs,
         }
 
+    def get_index_tickers(self, index_name: str = 'SP500') -> List[str]:
+        """
+        Get list of tickers for various stock market indexes.
+
+        Args:
+            index_name: Name of the index (SP500, NASDAQ100, DOW30, FTSE100, DAX, CAC40, NIKKEI225, ASX200, TSX60)
+
+        Returns:
+            List of ticker symbols
+        """
+        tickers, _source = self.get_index_tickers_with_source(index_name)
+        return tickers
+
+    def get_index_tickers_with_source(self, index_name: str = 'SP500') -> "tuple[List[str], str]":
+        """Same as ``get_index_tickers``, but also reports where the list came
+        from: ``"fresh_cache"``, ``"live"``, ``"stale_cache"``, or
+        ``"fallback"`` (the small curated list). Callers that want to warn
+        the user about a silent fallback (e.g. the Streamlit UI) should use
+        this instead of ``get_index_tickers``.
+        """
+        index_map = self._index_fetcher_map()
+
         fetcher = index_map.get(index_name)
         if fetcher is None:
             logger.warning(
                 f"Unknown index '{index_name}' requested — no matching universe. "
                 f"Falling back to S&P 500 (US). Valid keys: {sorted(index_map)}"
             )
-            fetcher = self._get_sp500_tickers
-        return fetcher()
+            return self._get_sp500_tickers(), "fallback"
+
+        # Upgrade to live, full constituents where a reliable source is wired up
+        # (developed-market indexes); the curated method is the fallback.
+        from .constituents import INDEX_SOURCES, get_constituents_with_source
+        if index_name in INDEX_SOURCES:
+            return get_constituents_with_source(index_name, fallback=fetcher)
+
+        return fetcher(), "live"
 
     def get_sp500_tickers(self) -> List[str]:
         """Legacy method - calls get_index_tickers('SP500')"""
@@ -355,28 +377,57 @@ class DataFetcher:
 
     def _get_sp500_tickers(self) -> List[str]:
         """
-        Get list of S&P 500 tickers.
+        Get the full list of S&P 500 tickers (all ~500 constituents).
+
+        Fetches live constituents from Wikipedia, with a maintained-CSV
+        secondary source, and only falls back to a curated ~90-name list if
+        both live sources fail.
 
         Returns:
             List of ticker symbols
         """
+        import io
+
+        def _clean(symbols):
+            # yfinance uses '-' where tickers carry a class suffix (BRK.B -> BRK-B).
+            return [str(s).strip().replace('.', '-') for s in symbols if str(s).strip()]
+
+        # Primary: Wikipedia constituents table. A real browser User-Agent is
+        # required or Wikipedia returns a block page. (The previous version
+        # passed an invalid storage_options argument to read_html, which raised
+        # every time and silently dropped to the ~90-name fallback below.)
         try:
-            # Get S&P 500 tickers from Wikipedia
+            import requests
             url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
-            import ssl
-            import certifi
-            ssl_context = ssl.create_default_context(cafile=certifi.where())
-            tables = pd.read_html(url, storage_options={'ssl': ssl_context})
-            sp500_table = tables[0]
-            tickers = sp500_table['Symbol'].tolist()
-            # Clean tickers (remove dots for compatibility)
-            tickers = [ticker.replace('.', '-') for ticker in tickers]
-            return tickers
+            resp = requests.get(url, headers={'User-Agent': 'Mozilla/5.0 (graham-trader)'}, timeout=15)
+            resp.raise_for_status()
+            tables = pd.read_html(io.StringIO(resp.text))
+            tickers = _clean(tables[0]['Symbol'].tolist())
+            if len(tickers) >= 400:
+                logger.info(f"Fetched {len(tickers)} S&P 500 tickers from Wikipedia")
+                return tickers
+            logger.warning(f"Wikipedia returned only {len(tickers)} S&P 500 tickers; trying secondary source")
         except Exception as e:
-            logger.warning(f"Error fetching S&P 500 tickers from Wikipedia: {e}")
-            # Fallback to a curated list of major S&P 500 stocks
-            logger.info("Using fallback list of major S&P 500 stocks")
-            return [
+            logger.warning(f"Wikipedia S&P 500 fetch failed: {e}")
+
+        # Secondary: maintained constituents CSV (datahub).
+        try:
+            import requests
+            csv_url = 'https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv'
+            resp = requests.get(csv_url, timeout=15)
+            resp.raise_for_status()
+            df = pd.read_csv(io.StringIO(resp.text))
+            col = 'Symbol' if 'Symbol' in df.columns else df.columns[0]
+            tickers = _clean(df[col].tolist())
+            if len(tickers) >= 400:
+                logger.info(f"Fetched {len(tickers)} S&P 500 tickers from datahub CSV")
+                return tickers
+        except Exception as e:
+            logger.warning(f"datahub S&P 500 fetch failed: {e}")
+
+        # Last resort: curated list of major S&P 500 stocks.
+        logger.info("Using fallback list of ~90 major S&P 500 stocks")
+        return [
                 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'NVDA', 'META', 'TSLA', 'BRK-B',
                 'JNJ', 'V', 'WMT', 'JPM', 'MA', 'PG', 'UNH', 'HD', 'CVX', 'XOM',
                 'LLY', 'ABBV', 'MRK', 'KO', 'PEP', 'COST', 'AVGO', 'TMO', 'ADBE',

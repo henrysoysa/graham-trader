@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from src.data.data_fetcher import DataFetcher
 from src.screening.graham_criteria import GrahamScreener
 from src.portfolio.simulator import PortfolioSimulator
+from src.backtesting.graham_backtest import GrahamBacktester, benchmark_for_ticker
 from src.visualization.charts import ChartBuilder
 from src.universe import (
     UNIVERSE_OPTIONS,
@@ -72,6 +73,9 @@ if 'simulator' not in st.session_state:
         rebalance_frequency=config.PORTFOLIO_SETTINGS['rebalance_frequency']
     )
 
+if 'backtester' not in st.session_state:
+    st.session_state.backtester = GrahamBacktester(st.session_state.data_fetcher)
+
 if 'screening_results' not in st.session_state:
     st.session_state.screening_results = None
 
@@ -127,6 +131,26 @@ def select_universe(widget_key, default_custom="AAPL, MSFT, GOOGL, JNJ, PG"):
     return universe_option, None, index_key
 
 
+def fetch_index_tickers(index_key, universe_option):
+    """Fetch tickers for a market index and warn visibly if the live source
+    failed and we silently landed on the small curated fallback list, rather
+    than only logging it (which is easy to miss)."""
+    tickers, source = st.session_state.data_fetcher.get_index_tickers_with_source(index_key)
+    if source == "fallback":
+        st.warning(
+            f"⚠️ Couldn't reach the live data source for {universe_option}; "
+            f"using a small curated fallback list of {len(tickers)} stocks "
+            "instead of the full index. Results below only cover those "
+            "names — try again later for full coverage."
+        )
+    elif source == "stale_cache":
+        st.info(
+            f"ℹ️ Using a cached (possibly outdated) list of {len(tickers)} "
+            f"{universe_option} constituents; the live refresh failed."
+        )
+    return tickers
+
+
 def main():
     """Main application function."""
 
@@ -138,7 +162,7 @@ def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Select a page:",
-        ["Stock Screener", "Portfolio Simulator", "Backtesting", "About"]
+        ["Stock Screener", "Portfolio Simulator", "Backtesting", "Graham Entry Analysis", "About"]
     )
 
     if page == "Stock Screener":
@@ -147,6 +171,8 @@ def main():
         show_portfolio_simulator()
     elif page == "Backtesting":
         show_backtesting()
+    elif page == "Graham Entry Analysis":
+        show_graham_entry_analysis()
     elif page == "About":
         show_about()
 
@@ -178,6 +204,20 @@ def show_stock_screener():
             help="Maximum number of stocks to display"
         )
 
+    scan_limit = st.slider(
+        "Universe scan size (max stocks to screen)",
+        min_value=10,
+        max_value=2000,
+        value=100,
+        step=10,
+        help=(
+            "How many stocks from the selected universe to actually screen. "
+            "Higher = more thorough but slower, since each stock is a separate "
+            "data fetch. The S&P 500 is ~500 names; the Russell 2000 is ~2000 "
+            "and can take many minutes to scan in full."
+        ),
+    )
+
     if universe_option.startswith("---"):
         st.info("Please select a specific market index from the dropdown.")
 
@@ -192,8 +232,18 @@ def show_stock_screener():
                 # Get tickers
                 if tickers is None:
                     with st.status(f"Fetching {universe_option} tickers..."):
-                        tickers = st.session_state.data_fetcher.get_index_tickers(index_key)
-                        st.write(f"Found {len(tickers)} stocks in {universe_option}")
+                        tickers = fetch_index_tickers(index_key, universe_option)
+                        total_found = len(tickers)
+                        # Apply the scan-size cap to index universes (custom
+                        # tickers the user typed are always screened in full).
+                        tickers = tickers[:int(scan_limit)]
+                        if len(tickers) < total_found:
+                            st.write(
+                                f"Found {total_found} stocks in {universe_option}; "
+                                f"screening the first {len(tickers)} (scan size)."
+                            )
+                        else:
+                            st.write(f"Found {total_found} stocks in {universe_option}; screening all of them.")
 
                 # Run screening
                 with st.status(f"Screening {len(tickers)} stocks..."):
@@ -358,7 +408,7 @@ def show_portfolio_simulator():
 
             # Get tickers from the selected market index
             if tickers is None:
-                tickers = st.session_state.data_fetcher.get_index_tickers(index_key)
+                tickers = fetch_index_tickers(index_key, universe_option)
 
             # Run simulation
             strategy_key = 'defensive' if strategy == "Defensive Investor" else 'enterprising'
@@ -477,7 +527,7 @@ def show_backtesting():
 
             # Get tickers from the selected market index (capped for performance)
             if tickers is None:
-                tickers = st.session_state.data_fetcher.get_index_tickers(index_key)
+                tickers = fetch_index_tickers(index_key, universe_option)
             tickers = tickers[:int(max_backtest_stocks)]
 
             # Run backtest
@@ -565,6 +615,124 @@ def show_backtesting():
                 use_container_width=True,
                 hide_index=True
             )
+
+
+def show_graham_entry_analysis():
+    """Per-stock analysis: relative performance and historical Graham entry signals."""
+    st.header("🎯 Graham Entry Analysis")
+    st.write(
+        "See how a single stock has performed against its home-country index, and "
+        "when it has traded at a Graham-style discount over one full economic cycle."
+    )
+
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        ticker = st.text_input(
+            "Ticker (use the yfinance symbol, e.g. AAPL, RELIANCE.NS, SHEL.L)",
+            "AAPL",
+        ).strip().upper()
+    with col2:
+        period = st.selectbox(
+            "History window",
+            ["5y", "10y", "max"],
+            index=1,
+            help="Aim for at least one full economic cycle (5-10 years).",
+        )
+    with col3:
+        mos_threshold = st.slider(
+            "Entry margin of safety",
+            min_value=0.0, max_value=0.6, value=0.33, step=0.01,
+            help="Graham looked for ~33% below intrinsic value.",
+        )
+
+    if not ticker:
+        st.info("Enter a ticker to begin.")
+        return
+
+    bench = benchmark_for_ticker(ticker)
+    if bench["matched"]:
+        st.caption(f"Home benchmark: **{bench['name']}** (`{bench['symbol']}`)")
+    else:
+        st.warning(
+            f"No home-country benchmark is mapped for the '.{bench['suffix']}' exchange, "
+            "so the relative-performance comparison will show the stock only."
+        )
+
+    if not st.button("📈 Analyse", type="primary"):
+        return
+
+    backtester = st.session_state.backtester
+
+    # (a) Relative performance vs the home index.
+    st.subheader("Relative performance vs the market")
+    with st.spinner("Fetching price history..."):
+        perf = backtester.relative_performance(ticker, period=period)
+
+    if perf["data"].empty:
+        st.error("Could not retrieve price history for this ticker.")
+        return
+
+    fig_rel = ChartBuilder.create_relative_performance_chart(
+        perf["data"], ticker, perf["benchmark_name"]
+    )
+    st.plotly_chart(fig_rel, use_container_width=True)
+
+    if "benchmark" in perf["data"].columns:
+        stock_ret = perf["data"]["stock"].iloc[-1] - 100
+        bench_ret = perf["data"]["benchmark"].iloc[-1] - 100
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"{ticker} return", f"{stock_ret:.1f}%")
+        c2.metric(f"{perf['benchmark_name']} return", f"{bench_ret:.1f}%")
+        c3.metric("Excess vs market", f"{stock_ret - bench_ret:+.1f}%")
+
+    # (b) Graham entry signals over time.
+    st.subheader("Graham entry points over time")
+    with st.spinner("Reconstructing Graham Number and margin of safety..."):
+        signals = backtester.graham_entry_history(
+            ticker, period=period, mos_threshold=mos_threshold
+        )
+
+    has_graham = (
+        not signals.empty
+        and "graham_number" in signals.columns
+        and signals["graham_number"].notna().any()
+    )
+
+    fig_entry = ChartBuilder.create_graham_entry_chart(signals, ticker)
+    st.plotly_chart(fig_entry, use_container_width=True)
+
+    if not has_graham:
+        st.info(
+            "Not enough historical fundamentals (EPS and book value) were available "
+            "from the free data source to reconstruct the Graham Number for this "
+            "stock. The price line is shown for reference. Graham reconstruction "
+            "works best for large, long-listed companies with full statement history."
+        )
+        return
+
+    # Summary stats over the reconstructed window.
+    valid = signals["graham_number"].notna()
+    entry_share = signals.loc[valid, "is_entry"].mean() * 100 if valid.any() else 0.0
+    current_mos = signals["margin_of_safety"].dropna()
+    fundamentals_years = signals["eps_ttm"].dropna().index
+    span_years = 0
+    if len(fundamentals_years) > 1:
+        span_years = round((fundamentals_years.max() - fundamentals_years.min()).days / 365.25, 1)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Time at a Graham discount", f"{entry_share:.0f}%")
+    if not current_mos.empty:
+        latest = current_mos.iloc[-1] * 100
+        c2.metric("Latest margin of safety", f"{latest:.1f}%",
+                  "undervalued" if latest > 0 else "above intrinsic value")
+    c3.metric("Fundamentals history", f"~{span_years} yrs")
+
+    st.caption(
+        "Green bands mark windows when the stock traded at or below your chosen "
+        "margin-of-safety discount to its Graham Number. Historical fundamentals "
+        "are stepped forward from each annual report date, so the Graham Number "
+        "changes in steps rather than continuously."
+    )
 
 
 def show_about():

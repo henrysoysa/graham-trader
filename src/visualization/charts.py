@@ -377,3 +377,136 @@ class ChartBuilder:
         )
 
         return fig
+
+    @staticmethod
+    def create_relative_performance_chart(
+        perf_df: pd.DataFrame,
+        ticker: str,
+        benchmark_name: Optional[str] = None,
+    ) -> go.Figure:
+        """Stock vs. its home index, both rebased to 100 at the start.
+
+        Args:
+            perf_df: DataFrame indexed by date with a 'stock' column and,
+                optionally, a 'benchmark' column (already normalised to 100).
+            ticker: Stock ticker (for the legend).
+            benchmark_name: Human name of the benchmark index.
+
+        Returns:
+            Plotly figure.
+        """
+        fig = go.Figure()
+        if perf_df is None or perf_df.empty or 'stock' not in perf_df.columns:
+            fig.add_annotation(
+                text="No price history available for this ticker",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+                font=dict(size=16),
+            )
+            return fig
+
+        fig.add_trace(go.Scatter(
+            x=perf_df.index, y=perf_df['stock'], mode='lines',
+            name=ticker.upper(), line=dict(color='#2E86AB', width=2.5),
+        ))
+        if 'benchmark' in perf_df.columns:
+            fig.add_trace(go.Scatter(
+                x=perf_df.index, y=perf_df['benchmark'], mode='lines',
+                name=benchmark_name or 'Benchmark',
+                line=dict(color='#A23B72', width=2, dash='dot'),
+            ))
+
+        fig.add_hline(y=100, line=dict(color='#999', width=1, dash='dash'))
+        title = f"{ticker.upper()} vs {benchmark_name}" if benchmark_name else f"{ticker.upper()} — Relative Performance"
+        fig.update_layout(
+            title=f"{title} (rebased to 100)",
+            xaxis_title='Date',
+            yaxis_title='Growth of 100',
+            hovermode='x unified',
+            template='plotly_white',
+            height=500,
+        )
+        return fig
+
+    @staticmethod
+    def create_graham_entry_chart(signal_df: pd.DataFrame, ticker: str) -> go.Figure:
+        """Price vs. Graham Number over time, with entry windows shaded and a
+        margin-of-safety sub-plot.
+
+        Args:
+            signal_df: Output of compute_graham_signal_series (date-indexed with
+                price, graham_number, margin_of_safety, is_entry).
+            ticker: Stock ticker (for titles).
+
+        Returns:
+            Plotly figure.
+        """
+        if signal_df is None or signal_df.empty or signal_df['price'].dropna().empty:
+            fig = go.Figure()
+            fig.add_annotation(
+                text="No price history available for this ticker",
+                xref="paper", yref="paper", x=0.5, y=0.5, showarrow=False,
+                font=dict(size=16),
+            )
+            return fig
+
+        has_graham = 'graham_number' in signal_df.columns and signal_df['graham_number'].notna().any()
+
+        fig = make_subplots(
+            rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.08,
+            row_heights=[0.68, 0.32],
+            subplot_titles=(
+                f"{ticker.upper()} — Price vs Graham Number",
+                "Margin of Safety vs Graham Number",
+            ),
+        )
+
+        # Shade the entry windows (price at a Graham discount) as vertical bands.
+        if 'is_entry' in signal_df.columns:
+            for start, end in ChartBuilder._true_runs(signal_df['is_entry']):
+                fig.add_vrect(
+                    x0=start, x1=end, row=1, col=1,
+                    fillcolor='rgba(46, 160, 67, 0.12)', line_width=0,
+                )
+
+        fig.add_trace(go.Scatter(
+            x=signal_df.index, y=signal_df['price'], mode='lines',
+            name='Price', line=dict(color='#2E86AB', width=2),
+        ), row=1, col=1)
+
+        if has_graham:
+            fig.add_trace(go.Scatter(
+                x=signal_df.index, y=signal_df['graham_number'], mode='lines',
+                name='Graham Number', line=dict(color='#E1A100', width=2, dash='dot'),
+            ), row=1, col=1)
+
+            fig.add_trace(go.Scatter(
+                x=signal_df.index, y=signal_df['margin_of_safety'] * 100, mode='lines',
+                name='Margin of Safety', line=dict(color='#A23B72', width=2),
+                showlegend=False,
+            ), row=2, col=1)
+            fig.add_hline(y=0, line=dict(color='#999', width=1), row=2, col=1)
+
+        fig.update_yaxes(title_text='Price / Graham Number', row=1, col=1)
+        fig.update_yaxes(title_text='MoS (%)', row=2, col=1)
+        fig.update_xaxes(title_text='Date', row=2, col=1)
+        fig.update_layout(
+            template='plotly_white', height=650, hovermode='x unified',
+            legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        )
+        return fig
+
+    @staticmethod
+    def _true_runs(mask: pd.Series):
+        """Yield (start_index, end_index) pairs for each contiguous run of True."""
+        mask = mask.fillna(False).astype(bool)
+        start = None
+        prev_idx = None
+        for idx, val in mask.items():
+            if val and start is None:
+                start = idx
+            elif not val and start is not None:
+                yield (start, prev_idx)
+                start = None
+            prev_idx = idx
+        if start is not None:
+            yield (start, prev_idx)
