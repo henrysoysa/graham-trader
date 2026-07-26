@@ -132,23 +132,33 @@ def select_universe(widget_key, default_custom="AAPL, MSFT, GOOGL, JNJ, PG"):
 
 
 def fetch_index_tickers(index_key, universe_option):
-    """Fetch tickers for a market index and warn visibly if the live source
-    failed and we silently landed on the small curated fallback list, rather
-    than only logging it (which is easy to miss)."""
-    tickers, source = st.session_state.data_fetcher.get_index_tickers_with_source(index_key)
+    """Fetch tickers for a market index.
+
+    Returns ``(tickers, source)``. Callers must render the fallback/stale-cache
+    warning themselves via ``render_universe_source_warning`` *outside* any
+    ``st.status(...)`` block — st.status auto-collapses once its ``with``
+    block exits, which would otherwise hide the warning inside a collapsed,
+    easy-to-miss expander (this is exactly how a silent Russell 2000 fallback
+    to the ~90-name curated list went unnoticed before).
+    """
+    return st.session_state.data_fetcher.get_index_tickers_with_source(index_key)
+
+
+def render_universe_source_warning(source, universe_option, count):
+    """Render a visible warning/info banner when a universe scan didn't come
+    from a genuine live fetch. Must be called outside any st.status block."""
     if source == "fallback":
         st.warning(
             f"⚠️ Couldn't reach the live data source for {universe_option}; "
-            f"using a small curated fallback list of {len(tickers)} stocks "
+            f"using a small curated fallback list of {count} stocks "
             "instead of the full index. Results below only cover those "
             "names — try again later for full coverage."
         )
     elif source == "stale_cache":
         st.info(
-            f"ℹ️ Using a cached (possibly outdated) list of {len(tickers)} "
+            f"ℹ️ Using a cached (possibly outdated) list of {count} "
             f"{universe_option} constituents; the live refresh failed."
         )
-    return tickers
 
 
 def main():
@@ -232,7 +242,7 @@ def show_stock_screener():
                 # Get tickers
                 if tickers is None:
                     with st.status(f"Fetching {universe_option} tickers..."):
-                        tickers = fetch_index_tickers(index_key, universe_option)
+                        tickers, source = fetch_index_tickers(index_key, universe_option)
                         total_found = len(tickers)
                         # Apply the scan-size cap to index universes (custom
                         # tickers the user typed are always screened in full).
@@ -244,6 +254,8 @@ def show_stock_screener():
                             )
                         else:
                             st.write(f"Found {total_found} stocks in {universe_option}; screening all of them.")
+
+                render_universe_source_warning(source, universe_option, total_found)
 
                 # Run screening
                 with st.status(f"Screening {len(tickers)} stocks..."):
@@ -408,7 +420,8 @@ def show_portfolio_simulator():
 
             # Get tickers from the selected market index
             if tickers is None:
-                tickers = fetch_index_tickers(index_key, universe_option)
+                tickers, source = fetch_index_tickers(index_key, universe_option)
+                render_universe_source_warning(source, universe_option, len(tickers))
 
             # Run simulation
             strategy_key = 'defensive' if strategy == "Defensive Investor" else 'enterprising'
@@ -527,7 +540,8 @@ def show_backtesting():
 
             # Get tickers from the selected market index (capped for performance)
             if tickers is None:
-                tickers = fetch_index_tickers(index_key, universe_option)
+                tickers, source = fetch_index_tickers(index_key, universe_option)
+                render_universe_source_warning(source, universe_option, len(tickers))
             tickers = tickers[:int(max_backtest_stocks)]
 
             # Run backtest
