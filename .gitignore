@@ -47,6 +47,7 @@ ENV/
 *.sqlite
 cache/
 /data/
+/scans/
 
 # Logs
 *.log
