@@ -211,12 +211,32 @@ class GrahamBacktester:
             logger.warning(f"Could not fetch prices for {symbol}: {e}")
             return None
 
+    # A balance-sheet share count and yfinance's quoted-security share count
+    # (info['sharesOutstanding']) are expected to differ by a small amount
+    # (timing of buybacks/issuance between filing and quote refresh) but not
+    # by orders of magnitude. A larger gap means the balance sheet's share
+    # count is denominated in something other than the traded security —
+    # most commonly a foreign ADR, where the balance sheet reports ordinary
+    # (home-market) shares but the ADR represents a different ratio of them.
+    # Dividing ADR-level equity by ordinary-share count then produces a
+    # bogus book-value-per-ADR (see ADOOY: ~55x too small).
+    _SHARE_COUNT_MISMATCH_RATIO = 3.0
+
     def _historical_fundamentals(self, ticker: str) -> pd.DataFrame:
         """Best-effort EPS (TTM proxy) and book value per share by report date.
 
         Uses annual statements from the data source. Returns an empty frame when
         fundamentals are unavailable — the caller then falls back to a
         price-only view.
+
+        The most recent point is overridden with yfinance's own quoted-security
+        eps/bookValue (the same fields the Screener uses via ``get_key_metrics``)
+        whenever the balance sheet's share count looks like it isn't denominated
+        in the traded security (see ``_SHARE_COUNT_MISMATCH_RATIO``) — this keeps
+        "today" consistent between this page and the Screener, and avoids a
+        wrong-by-orders-of-magnitude BVPS for ADRs. Prior years keep the
+        statement-derived reconstruction since that's the only source for real
+        multi-year history.
         """
         try:
             statements = self.data_fetcher.get_financial_statements(ticker)
@@ -250,7 +270,50 @@ class GrahamBacktester:
 
         df = pd.DataFrame(records)
         df.index = pd.to_datetime(df.index).tz_localize(None)
-        return df.sort_index().dropna(how="all")
+        df = df.sort_index().dropna(how="all")
+
+        if not df.empty and shares is not None and not shares.dropna().empty:
+            self._patch_latest_point_if_share_count_mismatched(df, ticker, shares)
+
+        return df
+
+    def _patch_latest_point_if_share_count_mismatched(
+        self, df: pd.DataFrame, ticker: str, statement_shares: pd.Series
+    ) -> None:
+        """Mutates ``df`` in place: replaces the most recent row's eps_ttm/bvps
+        with yfinance's quoted-security info fields if the balance sheet's
+        share count doesn't plausibly match the traded security's."""
+        try:
+            info = self.data_fetcher.get_stock_info(ticker)
+        except Exception as e:  # pragma: no cover
+            logger.debug(f"Could not fetch info for {ticker} share-count check: {e}")
+            return
+
+        quoted_shares = info.get("sharesOutstanding")
+        latest_statement_shares = statement_shares.dropna().iloc[-1] if not statement_shares.dropna().empty else None
+        if not quoted_shares or not latest_statement_shares:
+            return
+
+        ratio = max(quoted_shares, latest_statement_shares) / min(quoted_shares, latest_statement_shares)
+        if ratio < self._SHARE_COUNT_MISMATCH_RATIO:
+            return  # close enough; statement-derived figures stand.
+
+        quoted_bvps = info.get("bookValue")
+        quoted_eps = info.get("trailingEps")
+        if not quoted_bvps and not quoted_eps:
+            return
+
+        logger.info(
+            f"{ticker}: balance-sheet share count ({latest_statement_shares:,.0f}) differs "
+            f"{ratio:.1f}x from quoted sharesOutstanding ({quoted_shares:,.0f}) — likely an "
+            "ADR with a different ordinary-share ratio. Using yfinance's quoted eps/bookValue "
+            "for the most recent point instead of the statement-derived figures."
+        )
+        last_idx = df.index[-1]
+        if quoted_bvps:
+            df.loc[last_idx, "bvps"] = quoted_bvps
+        if quoted_eps:
+            df.loc[last_idx, "eps_ttm"] = quoted_eps
 
     @staticmethod
     def _extract_row(statement: pd.DataFrame, candidate_labels) -> Optional[pd.Series]:

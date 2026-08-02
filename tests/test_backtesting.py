@@ -145,3 +145,102 @@ def test_relative_performance_without_benchmark_data():
     res = bt.relative_performance("AAPL")
     assert "stock" in res["data"].columns
     assert "benchmark" not in res["data"].columns
+
+
+# --------------------------------------------------------------------------
+# ADR share-count mismatch: the Graham Entry Analysis page reconstructs BVPS
+# from balance-sheet equity / balance-sheet shares outstanding, but for a
+# foreign ADR that share count is denominated in the *ordinary* (home-market)
+# shares, not the ADR itself — dividing ADR-level equity by that count
+# produces a BVPS wrong by whatever the ADR ratio is (see ADOOY: ~55x too
+# small, which made a genuinely undervalued stock look wildly overvalued).
+# --------------------------------------------------------------------------
+
+class _StatementFetcher:
+    """Fake DataFetcher: canned prices, financial statements, and info."""
+
+    def __init__(self, prices, income, balance, info):
+        self._prices = prices
+        self._income = income
+        self._balance = balance
+        self._info = info
+
+    def get_historical_prices(self, symbol, start_date=None, end_date=None, period="5y"):
+        return self._prices.get(symbol, pd.DataFrame())
+
+    def get_financial_statements(self, ticker):
+        return {"income_statement": self._income, "balance_sheet": self._balance}
+
+    def get_stock_info(self, ticker):
+        return self._info
+
+
+def _adr_statements():
+    dates = [pd.Timestamp("2024-12-31"), pd.Timestamp("2025-12-31")]
+    income = pd.DataFrame(
+        {dates[0]: {"Diluted EPS": 0.80}, dates[1]: {"Diluted EPS": 0.86}}
+    )
+    # Equity in ADR-scale dollars; shares in ordinary (home-market) count —
+    # ~54x larger than the ADR's own sharesOutstanding, mirroring ADOOY.
+    balance = pd.DataFrame(
+        {
+            dates[0]: {"Stockholders Equity": 4_926_856_000.0, "Ordinary Shares Number": 30_244_918_400.0},
+            dates[1]: {"Stockholders Equity": 4_485_423_000.0, "Ordinary Shares Number": 28_800_494_200.0},
+        }
+    )
+    return income, balance
+
+
+def test_historical_fundamentals_patches_latest_bvps_on_adr_share_mismatch():
+    income, balance = _adr_statements()
+    info = {"sharesOutstanding": 576_009_884, "bookValue": 8.5, "trailingEps": 0.86}
+    fetcher = _StatementFetcher({}, income, balance, info)
+    bt = GrahamBacktester(fetcher)
+
+    fundamentals = bt._historical_fundamentals("ADOOY")
+
+    # Most recent point overridden with yfinance's quoted-security bvps/eps.
+    latest = fundamentals.iloc[-1]
+    assert latest["bvps"] == pytest.approx(8.5)
+    assert latest["eps_ttm"] == pytest.approx(0.86)
+
+    # Prior year is left as the (still statement-derived) reconstruction —
+    # only the latest point is patched, since that's what info reflects.
+    prior = fundamentals.iloc[0]
+    assert prior["bvps"] == pytest.approx(4_926_856_000.0 / 30_244_918_400.0)
+
+
+def test_historical_fundamentals_leaves_bvps_alone_when_share_counts_agree():
+    income, balance = _adr_statements()
+    # sharesOutstanding close to the balance sheet's count (no ADR-style
+    # mismatch) -> statement-derived bvps should stand, un-patched.
+    info = {"sharesOutstanding": 28_900_000_000, "bookValue": 999.0, "trailingEps": 999.0}
+    fetcher = _StatementFetcher({}, income, balance, info)
+    bt = GrahamBacktester(fetcher)
+
+    fundamentals = bt._historical_fundamentals("NORMALCO")
+
+    latest = fundamentals.iloc[-1]
+    assert latest["bvps"] == pytest.approx(4_485_423_000.0 / 28_800_494_200.0)
+    assert latest["bvps"] != pytest.approx(999.0)
+
+
+def test_graham_entry_history_end_to_end_matches_screener_style_values():
+    """The bug as reported: Entry Analysis's most recent margin-of-safety
+    should agree with a Screener-style calculation using yfinance's own
+    bookValue/trailingEps, not the statement-derived (mismatched) BVPS."""
+    income, balance = _adr_statements()
+    info = {"sharesOutstanding": 576_009_884, "bookValue": 8.5, "trailingEps": 0.86}
+    idx = pd.date_range("2026-07-01", periods=3, freq="D")
+    prices = {"ADOOY": pd.DataFrame({"Close": [7.12, 7.12, 7.12]}, index=idx)}
+    fetcher = _StatementFetcher(prices, income, balance, info)
+    bt = GrahamBacktester(fetcher)
+
+    signals = bt.graham_entry_history("ADOOY", period="5y")
+    last = signals.iloc[-1]
+
+    expected_graham_number = (22.5 * 0.86 * 8.5) ** 0.5
+    assert last["graham_number"] == pytest.approx(expected_graham_number)
+    expected_mos = (expected_graham_number - 7.12) / expected_graham_number
+    assert last["margin_of_safety"] == pytest.approx(expected_mos)
+    assert last["is_entry"] == (expected_mos >= 0.33)
