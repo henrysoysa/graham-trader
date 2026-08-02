@@ -65,19 +65,28 @@ INDEX_SOURCES: Dict[str, Dict] = {
     # client — including curl_cffi with browser TLS impersonation. Rather than
     # silently falling back to a 90-name curated list on every single run, we
     # approximate Russell 2000 membership from SEC's full filer list, filtered
-    # to the small/mid-cap market-cap band the index actually covers. It won't
-    # match official membership name-for-name, but it's a real, current
-    # universe of ~1500-2000+ names instead of a static ~90.
+    # to the market-cap band the index actually covers AND that this app's own
+    # Graham criteria can ever pass: Defensive requires market cap > $2B,
+    # Enterprising > $1B (see graham_criteria.py's size_check), so nothing
+    # below $1B can ever pass either screen — probing sub-$1B names burns
+    # request budget on stocks that would be auto-rejected downstream anyway.
+    # It won't match official Russell 2000 membership name-for-name, but it's
+    # a real, current universe of names Graham screening can actually use.
     "RUSSELL2000": {
         "source": "sec_market_cap",
-        "min_market_cap": 300e6,
+        "min_market_cap": 1e9,
         "max_market_cap": 10e9,
-        # SEC's full filer list is ~10k tickers; probing every one of them
-        # with a yfinance .info call is a multi-minute scan even threaded.
-        # Cap how many candidates get probed so a cold cache still resolves
-        # in reasonable time — matched names are added to disk cache, so
-        # later runs skip straight to the fresh-cache path in get_constituents.
-        "max_candidates": 3000,
+        # SEC's company_tickers.json is roughly market-cap descending, so the
+        # $1B-$10B band mostly lives well past the mega/large-cap head of the
+        # list. skip_ranks jumps past the names we already know are too big
+        # (rank 0 is NVDA) before spending probe budget; max_candidates caps
+        # the window read after that. Every lookup goes through the shared
+        # yf_throttle pacing (~2 req/s) to stay under Yahoo's rate limit, so
+        # (skip_ranks + max_candidates) is the real time cost on a cold cache
+        # — matched names are then cached to disk, so later runs skip
+        # straight to the fresh-cache path in get_constituents.
+        "skip_ranks": 800,
+        "max_candidates": 2500,
         "suffix": "",
         "min_count": 500,
     },
@@ -196,8 +205,10 @@ def _get_sec_cik_map() -> Dict[str, str]:
 def _sec_market_cap_lookup(ticker: str, min_mc: float, max_mc: Optional[float]) -> Optional[str]:
     import yfinance as yf
 
+    from .yf_throttle import throttled_call
+
     try:
-        info = yf.Ticker(ticker).info
+        info = throttled_call(lambda: yf.Ticker(ticker).info, context=ticker)
         mc = info.get("marketCap")
     except Exception:
         return None
@@ -212,13 +223,13 @@ def _fetch_sec_market_cap(spec: Dict) -> List[str]:
     """Approximate a market-cap-banded universe (e.g. Russell 2000) from SEC's
     full filer list, filtered by live market cap via yfinance.
 
-    This still costs ~one yfinance call per SEC filer (~10k), so it's run in
-    a thread pool (I/O-bound, GIL-released during the network call) and only
-    when the cache is stale — ``get_constituents`` handles that. Not official
-    index membership, a market-cap-band proxy for it.
+    Every lookup goes through the shared throttle in ``yf_throttle`` (see that
+    module's docstring — Yahoo's rate limit is undocumented, IP-based, and
+    triggers easily under concurrent bursts), which serializes the effective
+    request rate to ~2/s. A thread pool would just queue on that same lock,
+    so this runs sequentially: simpler, and avoids adding more concurrent
+    requests than the shared limiter is built to pace.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
     min_mc = spec.get("min_market_cap", 0)
     max_mc = spec.get("max_market_cap")
     cik_map = _get_sec_cik_map()
@@ -227,23 +238,20 @@ def _fetch_sec_market_cap(spec: Dict) -> List[str]:
     # SEC's company_tickers.json is roughly market-cap ordered (largest
     # first), so capping here still favors well-known names over penny stocks.
     tickers = [t for t in cik_map if re.fullmatch(r"[A-Z][A-Z0-9\-]{0,6}", t)]
+    skip_ranks = spec.get("skip_ranks", 0)
+    if skip_ranks:
+        tickers = tickers[skip_ranks:]
     max_candidates = spec.get("max_candidates")
     if max_candidates:
         tickers = tickers[:max_candidates]
 
     out: List[str] = []
-    done = 0
-    with ThreadPoolExecutor(max_workers=8) as pool:
-        futures = {
-            pool.submit(_sec_market_cap_lookup, t, min_mc, max_mc): t for t in tickers
-        }
-        for future in as_completed(futures):
-            done += 1
-            if done % 500 == 0:
-                logger.info(f"SEC market-cap scan: {done}/{len(tickers)} ({len(out)} matched so far)")
-            result = future.result()
-            if result:
-                out.append(result)
+    for done, ticker in enumerate(tickers, start=1):
+        if done % 500 == 0:
+            logger.info(f"SEC market-cap scan: {done}/{len(tickers)} ({len(out)} matched so far)")
+        result = _sec_market_cap_lookup(ticker, min_mc, max_mc)
+        if result:
+            out.append(result)
     out.sort()
     return out
 

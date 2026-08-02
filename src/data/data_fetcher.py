@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
 import logging
 
+from .yf_throttle import throttled_call
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -80,9 +82,7 @@ class DataFetcher:
             raise ValueError("yfinance is required for this operation")
 
         try:
-            stock = self.yf.Ticker(ticker)
-            info = stock.info
-            return info
+            return throttled_call(lambda: self.yf.Ticker(ticker).info, context=ticker)
         except Exception as e:
             logger.error(f"Error fetching info for {ticker}: {e}")
             return {}
@@ -103,9 +103,9 @@ class DataFetcher:
         if self.yf:
             try:
                 stock = self.yf.Ticker(ticker)
-                statements['income_statement'] = stock.income_stmt
-                statements['balance_sheet'] = stock.balance_sheet
-                statements['cash_flow'] = stock.cashflow
+                statements['income_statement'] = throttled_call(lambda: stock.income_stmt, context=ticker)
+                statements['balance_sheet'] = throttled_call(lambda: stock.balance_sheet, context=ticker)
+                statements['cash_flow'] = throttled_call(lambda: stock.cashflow, context=ticker)
                 logger.info(f"Fetched financial statements for {ticker} from yfinance")
                 return statements
             except Exception as e:
@@ -146,7 +146,7 @@ class DataFetcher:
             # Get basic info from yfinance
             if self.yf:
                 stock = self.yf.Ticker(ticker)
-                info = stock.info
+                info = throttled_call(lambda: stock.info, context=ticker)
 
                 # Extract key Graham metrics
                 metrics['current_price'] = info.get('currentPrice', info.get('regularMarketPrice', 0))
@@ -215,9 +215,9 @@ class DataFetcher:
         try:
             stock = self.yf.Ticker(ticker)
             if start_date and end_date:
-                df = stock.history(start=start_date, end=end_date)
+                df = throttled_call(lambda: stock.history(start=start_date, end=end_date), context=ticker)
             else:
-                df = stock.history(period=period)
+                df = throttled_call(lambda: stock.history(period=period), context=ticker)
 
             return df
         except Exception as e:
@@ -238,11 +238,11 @@ class DataFetcher:
         try:
             if self.yf:
                 stock = self.yf.Ticker(ticker)
-                financials = stock.financials
+                financials = throttled_call(lambda: stock.financials, context=ticker)
 
                 if not financials.empty and 'Net Income' in financials.index:
                     # Get shares outstanding to calculate EPS
-                    info = stock.info
+                    info = throttled_call(lambda: stock.info, context=ticker)
                     shares = info.get('sharesOutstanding', 0)
 
                     net_income = financials.loc['Net Income']
@@ -270,7 +270,7 @@ class DataFetcher:
 
         try:
             stock = self.yf.Ticker(ticker)
-            dividends = stock.dividends
+            dividends = throttled_call(lambda: stock.dividends, context=ticker)
             return pd.DataFrame({'Dividend': dividends})
         except Exception as e:
             logger.error(f"Error fetching dividend history for {ticker}: {e}")

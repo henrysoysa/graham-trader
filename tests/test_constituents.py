@@ -209,6 +209,34 @@ def test_fetch_sec_market_cap_respects_max_candidates(monkeypatch):
     assert len(seen) == 5  # never probed beyond the cap
 
 
+def test_fetch_sec_market_cap_respects_skip_ranks(monkeypatch):
+    """skip_ranks jumps past the market-cap-descending head of SEC's list
+    (mega/large-caps) before applying max_candidates, so probe budget lands
+    on the band actually being searched for instead of names already known
+    to be out of range."""
+    cik_map = {f"T{i}": str(i).zfill(10) for i in range(20)}
+    monkeypatch.setattr(C, "_get_sec_cik_map", lambda: cik_map)
+
+    seen = []
+
+    class _FakeTicker:
+        def __init__(self, t):
+            seen.append(t)
+            self.t = t
+
+        @property
+        def info(self):
+            return {"marketCap": 1e9}
+
+    import yfinance
+    monkeypatch.setattr(yfinance, "Ticker", _FakeTicker)
+
+    spec = {"min_market_cap": 300e6, "max_market_cap": 10e9, "skip_ranks": 10, "max_candidates": 5}
+    out = C._fetch_sec_market_cap(spec)
+    assert seen == [f"T{i}" for i in range(10, 15)]  # T0..T9 skipped entirely
+    assert len(out) == 5
+
+
 def test_fetch_sec_market_cap_skips_non_equity_looking_symbols(monkeypatch):
     cik_map = {"AAPL": "1", "BRK-B": "2", "SOMEWARRANT.WS": "3", "1234567": "4"}
     monkeypatch.setattr(C, "_get_sec_cik_map", lambda: cik_map)
