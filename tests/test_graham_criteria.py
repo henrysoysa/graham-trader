@@ -6,7 +6,7 @@ import pytest
 
 import config
 from src.data.data_fetcher import DataFetcher
-from src.screening.graham_criteria import GrahamScreener
+from src.screening.graham_criteria import GrahamScreener, ScreeningProgress
 from conftest import StubFetcher
 
 
@@ -213,3 +213,125 @@ def test_enterprising_requires_margin_of_safety():
     res2 = GrahamScreener(fetcher2, CRITERIA)._evaluate_enterprising("X")
     assert res2["margin_of_safety_check"] is True
     assert res2["passes_screening"] is True
+
+
+# --------------------------------------------------------------------------
+# Live-scan progress reporting (screen_defensive/screen_enterprising's
+# optional progress_callback, for surfacing progress on a large scan)
+# --------------------------------------------------------------------------
+
+class _PerTickerFetcher:
+    """A DataFetcher stand-in whose get_key_metrics/calculate_graham_number
+    can differ per ticker, and can raise for specific tickers - needed to
+    exercise the error/rate-limit branches of ScreeningProgress, which the
+    single-scorecard StubFetcher above can't do."""
+
+    def __init__(self, per_ticker):
+        # per_ticker: {ticker: "pass" | "fail" | Exception}
+        self._per_ticker = per_ticker
+
+    def get_key_metrics(self, ticker):
+        outcome = self._per_ticker[ticker]
+        if isinstance(outcome, Exception):
+            raise outcome
+        if outcome == "pass":
+            return {
+                "current_price": 30.0, "market_cap": 5_000_000_000, "eps": 5.0,
+                "pe_ratio": 10.0, "pb_ratio": 1.2, "current_ratio": 2.0,
+                "debt_to_current_assets": 0.5, "dividend_yield": 0.03,
+                "earnings_growth": 0.10,
+            }
+        # "fail": has data, but won't clear the margin-of-safety gate.
+        return {
+            "current_price": 30.0, "market_cap": 5_000_000_000, "eps": 5.0,
+            "pe_ratio": 10.0, "pb_ratio": 1.2, "current_ratio": 2.0,
+            "debt_to_current_assets": 0.5, "dividend_yield": 0.03,
+            "earnings_growth": 0.10,
+        }
+
+    def calculate_graham_number_from_metrics(self, ticker, metrics):
+        outcome = self._per_ticker[ticker]
+        if outcome == "pass":
+            return {"graham_number": 47.43, "margin_of_safety": 0.37}
+        return {"graham_number": 25.0, "margin_of_safety": -0.20}
+
+    def get_earnings_history(self, ticker, years=10):
+        import pandas as pd
+        return pd.DataFrame({"EPS": GROWING_EPS})
+
+
+def test_progress_reports_pass_fail_and_error_counts():
+    per_ticker = {
+        "GOOD": "pass",
+        "MEH": "fail",
+        "RATELIMITED": Exception("Too Many Requests. Rate limited. Try after a while."),
+        "BROKEN": ValueError("No data found for symbol"),
+    }
+    fetcher = _PerTickerFetcher(per_ticker)
+    screener = GrahamScreener(fetcher, CRITERIA)
+
+    snapshots = []
+    screener.screen_defensive(list(per_ticker.keys()), progress_callback=snapshots.append)
+
+    final = snapshots[-1]
+    assert final.total == 4
+    assert final.completed == 4
+    assert final.passed == 1
+    assert final.evaluated == 1       # MEH: had data, didn't pass
+    assert final.errors == 2          # RATELIMITED + BROKEN
+    assert final.rate_limited == 1    # only RATELIMITED
+    assert len(final.error_samples) == 2
+    assert any("RATELIMITED" in s for s in final.error_samples)
+    assert any("BROKEN" in s for s in final.error_samples)
+
+
+def test_progress_callback_fires_once_per_ticker_in_order():
+    per_ticker = {"A": "pass", "B": "pass", "C": "pass"}
+    fetcher = _PerTickerFetcher(per_ticker)
+    screener = GrahamScreener(fetcher, CRITERIA)
+
+    tickers_seen = []
+    screener.screen_defensive(
+        list(per_ticker.keys()),
+        progress_callback=lambda p: tickers_seen.append(p.current_ticker),
+    )
+    assert tickers_seen == ["A", "B", "C"]
+
+
+def test_progress_callback_exception_does_not_abort_the_scan():
+    per_ticker = {"A": "pass", "B": "pass"}
+    fetcher = _PerTickerFetcher(per_ticker)
+    screener = GrahamScreener(fetcher, CRITERIA)
+
+    def _boom(progress):
+        raise RuntimeError("UI blew up")
+
+    df = screener.screen_defensive(list(per_ticker.keys()), progress_callback=_boom)
+    assert len(df) == 2  # both tickers still evaluated despite the callback failing
+
+
+def test_progress_works_for_enterprising_screen_too():
+    per_ticker = {"A": "pass", "B": "fail"}
+    fetcher = _PerTickerFetcher(per_ticker)
+    screener = GrahamScreener(fetcher, CRITERIA)
+
+    snapshots = []
+    screener.screen_enterprising(list(per_ticker.keys()), progress_callback=snapshots.append)
+    assert snapshots[-1].completed == 2
+    assert snapshots[-1].passed == 1
+
+
+def test_screening_progress_eta_and_avg_are_none_before_any_completion():
+    p = ScreeningProgress(total=10)
+    assert p.completed == 0
+    assert p.avg_seconds_per_ticker == 0.0
+    assert p.eta_seconds is None
+
+
+def test_screen_without_progress_callback_still_works():
+    """progress_callback is optional - omitting it must not change behaviour."""
+    per_ticker = {"A": "pass"}
+    fetcher = _PerTickerFetcher(per_ticker)
+    screener = GrahamScreener(fetcher, CRITERIA)
+    df = screener.screen_defensive(["A"])
+    assert len(df) == 1

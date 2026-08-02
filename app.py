@@ -238,33 +238,68 @@ def show_stock_screener():
         elif tickers is not None and len(tickers) == 0:
             st.error("Please enter at least one ticker symbol.")
         else:
-            with st.spinner("Screening stocks... This may take a few minutes."):
-                # Get tickers
-                if tickers is None:
-                    with st.status(f"Fetching {universe_option} tickers..."):
-                        tickers, source = fetch_index_tickers(index_key, universe_option)
-                        total_found = len(tickers)
-                        # Apply the scan-size cap to index universes (custom
-                        # tickers the user typed are always screened in full).
-                        tickers = tickers[:int(scan_limit)]
-                        if len(tickers) < total_found:
-                            st.write(
-                                f"Found {total_found} stocks in {universe_option}; "
-                                f"screening the first {len(tickers)} (scan size)."
-                            )
-                        else:
-                            st.write(f"Found {total_found} stocks in {universe_option}; screening all of them.")
-
-                render_universe_source_warning(source, universe_option, total_found)
-
-                # Run screening
-                with st.status(f"Screening {len(tickers)} stocks..."):
-                    if strategy == "Defensive Investor":
-                        results = st.session_state.screener.screen_defensive(tickers)
+            # Get tickers
+            if tickers is None:
+                with st.status(f"Fetching {universe_option} tickers..."):
+                    tickers, source = fetch_index_tickers(index_key, universe_option)
+                    total_found = len(tickers)
+                    # Apply the scan-size cap to index universes (custom
+                    # tickers the user typed are always screened in full).
+                    tickers = tickers[:int(scan_limit)]
+                    if len(tickers) < total_found:
+                        st.write(
+                            f"Found {total_found} stocks in {universe_option}; "
+                            f"screening the first {len(tickers)} (scan size)."
+                        )
                     else:
-                        results = st.session_state.screener.screen_enterprising(tickers)
+                        st.write(f"Found {total_found} stocks in {universe_option}; screening all of them.")
 
-                    st.session_state.screening_results = results
+            render_universe_source_warning(source, universe_option, total_found)
+
+            # Run screening, with live progress: a bar plus running counters
+            # (passed/no-match/errors, and rate-limit errors broken out
+            # specifically) so a large scan isn't just a generic spinner for
+            # several minutes with no visibility into how it's going.
+            st.subheader(f"Screening {len(tickers)} stocks...")
+            progress_bar = st.progress(0.0)
+            status_line = st.empty()
+            metric_cols = st.columns(4)
+            metric_placeholders = [c.empty() for c in metric_cols]
+            last_progress = {}
+
+            def _render_progress(progress):
+                last_progress["snapshot"] = progress
+                frac = progress.completed / progress.total if progress.total else 1.0
+                progress_bar.progress(min(frac, 1.0))
+                eta = progress.eta_seconds
+                eta_str = f", ~{eta:.0f}s left" if eta is not None else ""
+                status_line.write(
+                    f"{progress.completed}/{progress.total} — currently on "
+                    f"**{progress.current_ticker}**{eta_str}"
+                )
+                metric_placeholders[0].metric("Passed", progress.passed)
+                metric_placeholders[1].metric("No match", progress.evaluated)
+                metric_placeholders[2].metric("Errors", progress.errors)
+                metric_placeholders[3].metric("Rate-limited", progress.rate_limited)
+
+            strategy_fn = (
+                st.session_state.screener.screen_defensive
+                if strategy == "Defensive Investor"
+                else st.session_state.screener.screen_enterprising
+            )
+            results = strategy_fn(tickers, progress_callback=_render_progress)
+            st.session_state.screening_results = results
+
+            progress_bar.progress(1.0)
+            status_line.write(f"Done — {len(tickers)}/{len(tickers)} screened.")
+
+            final = last_progress.get("snapshot")
+            if final and final.error_samples:
+                with st.expander(f"⚠️ {final.errors} tickers errored (of which {final.rate_limited} rate-limited)"):
+                    for sample in final.error_samples:
+                        st.text(sample)
+                    if final.errors > len(final.error_samples):
+                        st.caption(f"...and {final.errors - len(final.error_samples)} more (see logs for full detail).")
 
     # Display results
     if st.session_state.screening_results is not None and not st.session_state.screening_results.empty:

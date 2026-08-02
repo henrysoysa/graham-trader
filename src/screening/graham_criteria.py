@@ -8,14 +8,54 @@ Includes:
 - Enterprising Investor criteria
 """
 import copy
+import time
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Optional
+from dataclasses import dataclass, field
+from typing import Callable, List, Dict, Optional
 import logging
 
 from ..data.data_fetcher import DataFetcher
+from ..data.yf_throttle import is_rate_limit_error
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ScreeningProgress:
+    """Running state for one screen_defensive/screen_enterprising call.
+
+    Passed to an optional ``progress_callback`` after every ticker so a
+    caller (e.g. the Streamlit UI) can render live progress, without the
+    screener itself knowing anything about how it's displayed.
+    """
+    total: int
+    completed: int = 0
+    passed: int = 0
+    evaluated: int = 0          # got data back but didn't pass the screen
+    errors: int = 0
+    rate_limited: int = 0       # subset of errors specifically from Yahoo 429s
+    current_ticker: str = ""
+    started_at: float = field(default_factory=time.monotonic)
+    error_samples: List[str] = field(default_factory=list)  # last few "TICKER: reason"
+
+    @property
+    def elapsed_seconds(self) -> float:
+        return time.monotonic() - self.started_at
+
+    @property
+    def avg_seconds_per_ticker(self) -> float:
+        return self.elapsed_seconds / self.completed if self.completed else 0.0
+
+    @property
+    def eta_seconds(self) -> Optional[float]:
+        if self.completed == 0:
+            return None
+        remaining = self.total - self.completed
+        return remaining * self.avg_seconds_per_ticker
+
+
+ProgressCallback = Callable[[ScreeningProgress], None]
 
 # Fallback criteria, used only if the project-level ``config`` module cannot be
 # imported. These MUST mirror ``config.GRAHAM_CRITERIA`` (modernised thresholds)
@@ -76,7 +116,9 @@ class GrahamScreener:
             logger.warning("config.GRAHAM_CRITERIA unavailable; using inline fallback criteria")
             return copy.deepcopy(_FALLBACK_CRITERIA)
 
-    def screen_defensive(self, tickers: List[str]) -> pd.DataFrame:
+    def screen_defensive(
+        self, tickers: List[str], progress_callback: Optional[ProgressCallback] = None
+    ) -> pd.DataFrame:
         """
         Screen stocks using Benjamin Graham's Defensive Investor criteria.
 
@@ -92,28 +134,18 @@ class GrahamScreener:
 
         Args:
             tickers: List of stock ticker symbols
+            progress_callback: Optional callback invoked with a
+                ``ScreeningProgress`` after every ticker, for surfacing live
+                progress (e.g. in a Streamlit UI) on a large scan.
 
         Returns:
             DataFrame with screening results and scores
         """
-        results = []
+        return self._run_screen(tickers, self._evaluate_defensive, "Defensive", progress_callback)
 
-        for ticker in tickers:
-            try:
-                logger.info(f"Screening {ticker} (Defensive)")
-                score = self._evaluate_defensive(ticker)
-                if score:
-                    results.append(score)
-            except Exception as e:
-                logger.error(f"Error screening {ticker}: {e}")
-
-        df = pd.DataFrame(results)
-        if not df.empty:
-            df = df.sort_values('total_score', ascending=False)
-
-        return df
-
-    def screen_enterprising(self, tickers: List[str]) -> pd.DataFrame:
+    def screen_enterprising(
+        self, tickers: List[str], progress_callback: Optional[ProgressCallback] = None
+    ) -> pd.DataFrame:
         """
         Screen stocks using Benjamin Graham's Enterprising Investor criteria.
 
@@ -121,20 +153,55 @@ class GrahamScreener:
 
         Args:
             tickers: List of stock ticker symbols
+            progress_callback: Optional callback invoked with a
+                ``ScreeningProgress`` after every ticker, for surfacing live
+                progress (e.g. in a Streamlit UI) on a large scan.
 
         Returns:
             DataFrame with screening results and scores
         """
+        return self._run_screen(tickers, self._evaluate_enterprising, "Enterprising", progress_callback)
+
+    def _run_screen(
+        self,
+        tickers: List[str],
+        evaluate: Callable[[str], Optional[Dict]],
+        label: str,
+        progress_callback: Optional[ProgressCallback],
+    ) -> pd.DataFrame:
+        """Shared per-ticker loop for screen_defensive/screen_enterprising:
+        evaluates each ticker, categorises failures (rate-limited vs. other),
+        and reports a ``ScreeningProgress`` snapshot after each one."""
         results = []
+        progress = ScreeningProgress(total=len(tickers))
 
         for ticker in tickers:
+            progress.current_ticker = ticker
             try:
-                logger.info(f"Screening {ticker} (Enterprising)")
-                score = self._evaluate_enterprising(ticker)
+                logger.info(f"Screening {ticker} ({label})")
+                score = evaluate(ticker)
                 if score:
                     results.append(score)
+                    if score.get("passes_screening"):
+                        progress.passed += 1
+                    else:
+                        progress.evaluated += 1
+                else:
+                    progress.evaluated += 1  # no usable data, not an error
             except Exception as e:
+                progress.errors += 1
+                if is_rate_limit_error(e):
+                    progress.rate_limited += 1
                 logger.error(f"Error screening {ticker}: {e}")
+                if len(progress.error_samples) < 20:
+                    progress.error_samples.append(f"{ticker}: {e}")
+            finally:
+                progress.completed += 1
+                if progress_callback:
+                    try:
+                        progress_callback(progress)
+                    except Exception as e:  # pragma: no cover - UI callback must never break a scan
+                        logger.debug(f"progress_callback raised, ignoring: {e}")
 
         df = pd.DataFrame(results)
         if not df.empty:

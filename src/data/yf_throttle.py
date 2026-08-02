@@ -61,7 +61,7 @@ class _RateLimiter:
 _limiter = _RateLimiter(MIN_REQUEST_INTERVAL_SECONDS)
 
 
-def _is_rate_limit_error(exc: Exception) -> bool:
+def is_rate_limit_error(exc: Exception) -> bool:
     if type(exc).__name__ == "YFRateLimitError":
         return True
     text = str(exc).lower()
@@ -81,7 +81,7 @@ def throttled_call(fn: Callable[[], T], *, context: str = "") -> T:
         try:
             return fn()
         except Exception as e:
-            if not _is_rate_limit_error(e):
+            if not is_rate_limit_error(e):
                 raise
             last_exc = e
             if attempt == MAX_RETRIES:
