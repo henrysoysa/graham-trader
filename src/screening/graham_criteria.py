@@ -7,14 +7,83 @@ Includes:
 - Defensive Investor criteria
 - Enterprising Investor criteria
 """
+import copy
+import time
 import pandas as pd
 import numpy as np
-from typing import List, Dict, Optional
+from dataclasses import dataclass, field
+from typing import Callable, List, Dict, Optional
 import logging
 
 from ..data.data_fetcher import DataFetcher
+from ..data.yf_throttle import is_rate_limit_error
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ScreeningProgress:
+    """Running state for one screen_defensive/screen_enterprising call.
+
+    Passed to an optional ``progress_callback`` after every ticker so a
+    caller (e.g. the Streamlit UI) can render live progress, without the
+    screener itself knowing anything about how it's displayed.
+    """
+    total: int
+    completed: int = 0
+    passed: int = 0
+    evaluated: int = 0          # got data back but didn't pass the screen
+    errors: int = 0
+    rate_limited: int = 0       # subset of errors specifically from Yahoo 429s
+    current_ticker: str = ""
+    started_at: float = field(default_factory=time.monotonic)
+    error_samples: List[str] = field(default_factory=list)  # last few "TICKER: reason"
+
+    @property
+    def elapsed_seconds(self) -> float:
+        return time.monotonic() - self.started_at
+
+    @property
+    def avg_seconds_per_ticker(self) -> float:
+        return self.elapsed_seconds / self.completed if self.completed else 0.0
+
+    @property
+    def eta_seconds(self) -> Optional[float]:
+        if self.completed == 0:
+            return None
+        remaining = self.total - self.completed
+        return remaining * self.avg_seconds_per_ticker
+
+
+ProgressCallback = Callable[[ScreeningProgress], None]
+
+# Fallback criteria, used only if the project-level ``config`` module cannot be
+# imported. These MUST mirror ``config.GRAHAM_CRITERIA`` (modernised thresholds)
+# so behaviour is identical whether or not a config is supplied.
+_FALLBACK_CRITERIA = {
+    'defensive': {
+        'min_earnings_stability': 10,
+        'min_dividend_history': 10,
+        'min_earnings_growth': 0.33,
+        'max_pe_ratio': 25,
+        'max_pb_ratio': 4.0,
+        'min_current_ratio': 1.2,
+        'max_debt_to_current_assets': 1.5,
+        'margin_of_safety': 0.20,
+    },
+    'enterprising': {
+        'min_earnings_stability': 5,
+        'max_pe_ratio': 35,
+        'max_pb_ratio': 5.0,
+        'min_current_ratio': 1.0,
+        'margin_of_safety': 0.15,
+    },
+    'graham_number': {
+        'eps_multiplier': 15,
+        'book_value_multiplier': 1.5,
+        'max_multiplier': 22.5,
+    },
+}
 
 
 class GrahamScreener:
@@ -34,28 +103,22 @@ class GrahamScreener:
         self.criteria = criteria_config or self._default_criteria()
 
     def _default_criteria(self) -> Dict:
-        """Return default Graham criteria."""
-        return {
-            'defensive': {
-                'min_earnings_stability': 10,
-                'min_dividend_history': 20,
-                'min_earnings_growth': 0.33,
-                'max_pe_ratio': 15,
-                'max_pb_ratio': 1.5,
-                'min_current_ratio': 2.0,
-                'max_debt_to_current_assets': 1.1,
-                'margin_of_safety': 0.33,
-            },
-            'enterprising': {
-                'min_earnings_stability': 5,
-                'max_pe_ratio': 25,
-                'max_pb_ratio': 2.5,
-                'min_current_ratio': 1.5,
-                'margin_of_safety': 0.25,
-            }
-        }
+        """Return default Graham criteria.
 
-    def screen_defensive(self, tickers: List[str]) -> pd.DataFrame:
+        Single source of truth is ``config.GRAHAM_CRITERIA`` so the strict and
+        modernised thresholds can never silently diverge. If that module is not
+        importable we fall back to an identical inline copy.
+        """
+        try:
+            import config
+            return copy.deepcopy(config.GRAHAM_CRITERIA)
+        except Exception:
+            logger.warning("config.GRAHAM_CRITERIA unavailable; using inline fallback criteria")
+            return copy.deepcopy(_FALLBACK_CRITERIA)
+
+    def screen_defensive(
+        self, tickers: List[str], progress_callback: Optional[ProgressCallback] = None
+    ) -> pd.DataFrame:
         """
         Screen stocks using Benjamin Graham's Defensive Investor criteria.
 
@@ -71,28 +134,18 @@ class GrahamScreener:
 
         Args:
             tickers: List of stock ticker symbols
+            progress_callback: Optional callback invoked with a
+                ``ScreeningProgress`` after every ticker, for surfacing live
+                progress (e.g. in a Streamlit UI) on a large scan.
 
         Returns:
             DataFrame with screening results and scores
         """
-        results = []
+        return self._run_screen(tickers, self._evaluate_defensive, "Defensive", progress_callback)
 
-        for ticker in tickers:
-            try:
-                logger.info(f"Screening {ticker} (Defensive)")
-                score = self._evaluate_defensive(ticker)
-                if score:
-                    results.append(score)
-            except Exception as e:
-                logger.error(f"Error screening {ticker}: {e}")
-
-        df = pd.DataFrame(results)
-        if not df.empty:
-            df = df.sort_values('total_score', ascending=False)
-
-        return df
-
-    def screen_enterprising(self, tickers: List[str]) -> pd.DataFrame:
+    def screen_enterprising(
+        self, tickers: List[str], progress_callback: Optional[ProgressCallback] = None
+    ) -> pd.DataFrame:
         """
         Screen stocks using Benjamin Graham's Enterprising Investor criteria.
 
@@ -100,26 +153,120 @@ class GrahamScreener:
 
         Args:
             tickers: List of stock ticker symbols
+            progress_callback: Optional callback invoked with a
+                ``ScreeningProgress`` after every ticker, for surfacing live
+                progress (e.g. in a Streamlit UI) on a large scan.
 
         Returns:
             DataFrame with screening results and scores
         """
+        return self._run_screen(tickers, self._evaluate_enterprising, "Enterprising", progress_callback)
+
+    def _run_screen(
+        self,
+        tickers: List[str],
+        evaluate: Callable[[str], Optional[Dict]],
+        label: str,
+        progress_callback: Optional[ProgressCallback],
+    ) -> pd.DataFrame:
+        """Shared per-ticker loop for screen_defensive/screen_enterprising:
+        evaluates each ticker, categorises failures (rate-limited vs. other),
+        and reports a ``ScreeningProgress`` snapshot after each one."""
         results = []
+        progress = ScreeningProgress(total=len(tickers))
 
         for ticker in tickers:
+            progress.current_ticker = ticker
             try:
-                logger.info(f"Screening {ticker} (Enterprising)")
-                score = self._evaluate_enterprising(ticker)
+                logger.info(f"Screening {ticker} ({label})")
+                score = evaluate(ticker)
                 if score:
                     results.append(score)
+                    if score.get("passes_screening"):
+                        progress.passed += 1
+                    else:
+                        progress.evaluated += 1
+                else:
+                    progress.evaluated += 1  # no usable data, not an error
             except Exception as e:
+                progress.errors += 1
+                if is_rate_limit_error(e):
+                    progress.rate_limited += 1
                 logger.error(f"Error screening {ticker}: {e}")
+                if len(progress.error_samples) < 20:
+                    progress.error_samples.append(f"{ticker}: {e}")
+            finally:
+                progress.completed += 1
+                if progress_callback:
+                    try:
+                        progress_callback(progress)
+                    except Exception as e:  # pragma: no cover - UI callback must never break a scan
+                        logger.debug(f"progress_callback raised, ignoring: {e}")
 
         df = pd.DataFrame(results)
         if not df.empty:
             df = df.sort_values('total_score', ascending=False)
 
         return df
+
+    def _earnings_history_eps(self, ticker: str) -> Optional[pd.Series]:
+        """Return a chronological (oldest→newest) EPS series, or None.
+
+        Wraps DataFetcher.get_earnings_history and normalises ordering so the
+        stability/growth checks don't depend on the source's row order.
+        """
+        try:
+            hist = self.data_fetcher.get_earnings_history(ticker)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"earnings history unavailable for {ticker}: {e}")
+            return None
+        if hist is None or getattr(hist, 'empty', True) or 'EPS' not in getattr(hist, 'columns', []):
+            return None
+        eps = hist['EPS'].dropna().sort_index()
+        return eps if len(eps) >= 1 else None
+
+    def _earnings_stability_ok(self, eps: Optional[pd.Series], current_eps: float) -> bool:
+        """Earnings stability = no annual losses across available history.
+
+        Graham asked for multi-year positive earnings. yfinance rarely
+        provides more than ~4 years of statements, so we verify that every year
+        we *can* see is positive (a real multi-year check when data allows) and
+        fall back to the trailing-EPS sign when no history is available — the
+        latter keeps sparsely-covered non-US names from being auto-failed on a
+        data gap rather than on fundamentals.
+
+        Args:
+            eps: Chronological EPS history (from ``_earnings_history_eps``),
+                shared with ``_earnings_growth_ok`` so it's fetched once per
+                ticker rather than once per criterion.
+            current_eps: Trailing EPS fallback when no history is available.
+        """
+        if eps is not None:
+            return bool((eps > 0).all())
+        return bool(current_eps is not None and current_eps > 0)
+
+    def _earnings_growth_ok(self, eps: Optional[pd.Series], min_total_growth_10y: float, current_growth: float) -> bool:
+        """Earnings growth vs Graham's target (default 33% over 10 years).
+
+        Computes annualised EPS growth from available history and compares to
+        the annualised equivalent of the 10-year target. Falls back to the
+        trailing earnings-growth figure when history is too short.
+
+        Args:
+            eps: Same chronological EPS history passed to
+                ``_earnings_stability_ok`` — fetched once per ticker.
+        """
+        if eps is not None and len(eps) >= 2:
+            oldest = float(eps.iloc[0])
+            newest = float(eps.iloc[-1])
+            years = max(len(eps) - 1, 1)
+            if oldest > 0 and newest > 0:
+                annualised = (newest / oldest) ** (1.0 / years) - 1.0
+                target_annualised = (1.0 + min_total_growth_10y) ** (1.0 / 10.0) - 1.0
+                return bool(annualised >= target_annualised)
+            # Sign change (loss→profit or profit→loss): use direction.
+            return bool(newest > oldest)
+        return bool(current_growth is not None and current_growth > 0)
 
     def _evaluate_defensive(self, ticker: str) -> Optional[Dict]:
         """
@@ -132,10 +279,12 @@ class GrahamScreener:
             Dictionary with evaluation results or None if data unavailable
         """
         metrics = self.data_fetcher.get_key_metrics(ticker)
-        graham_calc = self.data_fetcher.calculate_graham_number(ticker)
 
         if not metrics or metrics.get('current_price', 0) == 0:
             return None
+
+        graham_calc = self.data_fetcher.calculate_graham_number_from_metrics(ticker, metrics)
+        eps_history = self._earnings_history_eps(ticker)
 
         criteria = self.criteria['defensive']
         result = {
@@ -177,8 +326,9 @@ class GrahamScreener:
         else:
             result['debt_check'] = False
 
-        # 4. Earnings stability (simplified - check if EPS is positive)
-        if result['eps'] > 0:
+        # 4. Earnings stability — no annual losses across available history
+        #    (falls back to trailing-EPS sign when history is unavailable).
+        if self._earnings_stability_ok(eps_history, result['eps']):
             total_score += 1
             result['earnings_stability_check'] = True
         else:
@@ -213,9 +363,20 @@ class GrahamScreener:
         else:
             result['graham_multiplier_check'] = False
 
-        # 9. Margin of safety vs Graham Number — core Graham principle.
+        # 9. Earnings growth vs Graham's target (default 33% over 10 years).
+        if self._earnings_growth_ok(
+            eps_history,
+            criteria.get('min_earnings_growth', 0.33),
+            metrics.get('earnings_growth', 0),
+        ):
+            total_score += 1
+            result['earnings_growth_check'] = True
+        else:
+            result['earnings_growth_check'] = False
+
+        # 10. Margin of safety vs Graham Number — core Graham principle.
         # Only meaningful when Graham Number could be computed (EPS > 0, BV > 0).
-        max_score = 9
+        max_score = 10
         min_mos = criteria.get('margin_of_safety', 0.20)
         if result['graham_number'] > 0 and result['margin_of_safety'] >= min_mos:
             total_score += 1
@@ -228,11 +389,11 @@ class GrahamScreener:
         result['max_score'] = max_score
         result['pass_percentage'] = (total_score / max_score) * 100
 
-        # Overall pass: need 6/9 criteria AND a positive margin of safety.
+        # Overall pass: need 7/10 criteria AND a positive margin of safety.
         # Without the MoS gate, stocks trading well above intrinsic value can
         # still pass on other metrics — defeating the point of value screening.
         result['passes_screening'] = (
-            total_score >= 6 and result['margin_of_safety_check']
+            total_score >= 7 and result['margin_of_safety_check']
         )
 
         return result
@@ -248,10 +409,12 @@ class GrahamScreener:
             Dictionary with evaluation results or None if data unavailable
         """
         metrics = self.data_fetcher.get_key_metrics(ticker)
-        graham_calc = self.data_fetcher.calculate_graham_number(ticker)
 
         if not metrics or metrics.get('current_price', 0) == 0:
             return None
+
+        graham_calc = self.data_fetcher.calculate_graham_number_from_metrics(ticker, metrics)
+        eps_history = self._earnings_history_eps(ticker)
 
         criteria = self.criteria['enterprising']
         result = {
@@ -283,8 +446,9 @@ class GrahamScreener:
         else:
             result['financial_condition_check'] = False
 
-        # 3. Positive earnings
-        if result['eps'] > 0:
+        # 3. Earnings stability — no annual losses across available history
+        #    (falls back to trailing-EPS sign when history is unavailable).
+        if self._earnings_stability_ok(eps_history, result['eps']):
             total_score += 1
             result['earnings_check'] = True
         else:

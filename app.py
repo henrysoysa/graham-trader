@@ -9,7 +9,14 @@ from datetime import datetime, timedelta
 from src.data.data_fetcher import DataFetcher
 from src.screening.graham_criteria import GrahamScreener
 from src.portfolio.simulator import PortfolioSimulator
+from src.backtesting.graham_backtest import GrahamBacktester, benchmark_for_ticker
 from src.visualization.charts import ChartBuilder
+from src.universe import (
+    UNIVERSE_OPTIONS,
+    UNIVERSE_MAPPING,
+    UNIVERSE_HELP,
+    resolve_index_key,
+)
 import config
 
 # Page configuration
@@ -66,6 +73,9 @@ if 'simulator' not in st.session_state:
         rebalance_frequency=config.PORTFOLIO_SETTINGS['rebalance_frequency']
     )
 
+if 'backtester' not in st.session_state:
+    st.session_state.backtester = GrahamBacktester(st.session_state.data_fetcher)
+
 if 'screening_results' not in st.session_state:
     st.session_state.screening_results = None
 
@@ -76,123 +86,11 @@ if 'backtest_results' not in st.session_state:
 # ------------------------------------------------------------------
 # Shared stock-universe selector
 # ------------------------------------------------------------------
-# A single source of truth for the market/universe picker so that EVERY
-# page (Screener, Portfolio Simulator, Backtesting) offers the same choices
-# and actually honours them. Previously the Simulator and Backtesting pages
-# hardcoded the S&P 500, which made the app appear to "always select the US".
-
-UNIVERSE_OPTIONS = [
-    "--- Developed Markets (Large Cap) ---",
-    "S&P 500 (USA)",
-    "NASDAQ-100 (USA)",
-    "Dow 30 (USA)",
-    "FTSE 100 (UK)",
-    "DAX (Germany)",
-    "CAC 40 (France)",
-    "Nikkei 225 (Japan)",
-    "ASX 200 (Australia)",
-    "TSX 60 (Canada)",
-    "--- Emerging Markets (Large Cap) ---",
-    "India - NIFTY 50",
-    "India - SENSEX 30",
-    "Brazil - BOVESPA",
-    "China - Hong Kong (HSI)",
-    "China - US ADRs",
-    "South Africa - JSE Top 40",
-    "Mexico - IPC",
-    "Indonesia - IDX",
-    "Vietnam - VN30",
-    "Emerging Markets ADRs (Recommended)",
-    "--- Broader Developed Markets ---",
-    "STOXX Europe 600",
-    "FTSE 250 (UK Mid Cap)",
-    "TOPIX Core 30 (Japan)",
-    "KOSPI 200 (South Korea)",
-    "Taiwan 50",
-    "Straits Times Index (Singapore)",
-    "SMI (Switzerland)",
-    "--- High-Growth Emerging Economies 🚀 ---",
-    "India - NIFTY Next 50",
-    "India - Smallcap 100",
-    "Vietnam - VN100",
-    "Philippines - PSEi",
-    "Thailand - SET50",
-    "Malaysia - KLCI",
-    "Bangladesh - DSE (limited data)",
-    "Egypt - EGX 30",
-    "Saudi Arabia - TASI",
-    "UAE - ADX / DFM",
-    "Turkey - BIST 100",
-    "Poland - WIG 20",
-    "Pakistan - KSE 100 (limited data)",
-    "Growth Markets ADRs (Recommended) 🚀",
-    "--- Hidden Gems (Small/Mid Cap) 💎 ---",
-    "Russell 2000 (US Small Caps)",
-    "India - Mid Caps",
-    "Brazil - Small Caps",
-    "China - Small Cap ADRs",
-    "Emerging Markets Small Caps 🌟",
-    "--- Other ---",
-    "Custom Tickers",
-]
-
-UNIVERSE_MAPPING = {
-    # Developed Markets
-    "S&P 500 (USA)": "SP500",
-    "NASDAQ-100 (USA)": "NASDAQ100",
-    "Dow 30 (USA)": "DOW30",
-    "FTSE 100 (UK)": "FTSE100",
-    "DAX (Germany)": "DAX",
-    "CAC 40 (France)": "CAC40",
-    "Nikkei 225 (Japan)": "NIKKEI225",
-    "ASX 200 (Australia)": "ASX200",
-    "TSX 60 (Canada)": "TSX60",
-    # Emerging Markets
-    "India - NIFTY 50": "INDIA_NIFTY50",
-    "India - SENSEX 30": "INDIA_SENSEX",
-    "Brazil - BOVESPA": "BRAZIL_BOVESPA",
-    "China - Hong Kong (HSI)": "CHINA_HSI",
-    "China - US ADRs": "CHINA_ADR",
-    "South Africa - JSE Top 40": "SOUTHAFRICA_TOP40",
-    "Mexico - IPC": "MEXICO_IPC",
-    "Indonesia - IDX": "INDONESIA_IDX",
-    "Vietnam - VN30": "VIETNAM_VN30",
-    "Emerging Markets ADRs (Recommended)": "EMERGING_ADR",
-    # Small/Mid Cap Discovery
-    "Russell 2000 (US Small Caps)": "RUSSELL2000",
-    "India - Mid Caps": "INDIA_MIDCAP",
-    "Brazil - Small Caps": "BRAZIL_SMALLCAP",
-    "China - Small Cap ADRs": "CHINA_SMALLCAP",
-    "Emerging Markets Small Caps 🌟": "EMERGING_SMALLCAP",
-    # Broader Developed Markets
-    "STOXX Europe 600": "STOXX600",
-    "FTSE 250 (UK Mid Cap)": "FTSE250",
-    "TOPIX Core 30 (Japan)": "TOPIX_CORE30",
-    "KOSPI 200 (South Korea)": "KOSPI200",
-    "Taiwan 50": "TAIWAN50",
-    "Straits Times Index (Singapore)": "STI_SINGAPORE",
-    "SMI (Switzerland)": "SMI_SWISS",
-    # High-Growth Emerging Economies
-    "India - NIFTY Next 50": "INDIA_NIFTY_NEXT50",
-    "India - Smallcap 100": "INDIA_SMALLCAP100",
-    "Vietnam - VN100": "VIETNAM_VN100",
-    "Philippines - PSEi": "PHILIPPINES_PSEI",
-    "Thailand - SET50": "THAILAND_SET50",
-    "Malaysia - KLCI": "MALAYSIA_KLCI",
-    "Bangladesh - DSE (limited data)": "BANGLADESH_DSE",
-    "Egypt - EGX 30": "EGYPT_EGX30",
-    "Saudi Arabia - TASI": "SAUDI_TASI",
-    "UAE - ADX / DFM": "UAE_ADX_DFM",
-    "Turkey - BIST 100": "TURKEY_BIST100",
-    "Poland - WIG 20": "POLAND_WIG20",
-    "Pakistan - KSE 100 (limited data)": "PAKISTAN_KSE100",
-    "Growth Markets ADRs (Recommended) 🚀": "GROWTH_MARKETS_ADR",
-}
-
-UNIVERSE_HELP = (
-    "🚀 = High-growth economies (IMF 2026–2030 projections). "
-    "💎 = Hidden Gems. ADRs = US-listed, easiest to trade."
-)
+# The universe options/mapping live in the pure ``src.universe`` module (so
+# they can be unit-tested without Streamlit). This wrapper renders the picker
+# and is shared by EVERY page (Screener, Portfolio Simulator, Backtesting) so
+# each one offers — and actually honours — the same markets. Previously the
+# Simulator and Backtesting pages hardcoded the S&P 500.
 
 
 def select_universe(widget_key, default_custom="AAPL, MSFT, GOOGL, JNJ, PG"):
@@ -233,6 +131,36 @@ def select_universe(widget_key, default_custom="AAPL, MSFT, GOOGL, JNJ, PG"):
     return universe_option, None, index_key
 
 
+def fetch_index_tickers(index_key, universe_option):
+    """Fetch tickers for a market index.
+
+    Returns ``(tickers, source)``. Callers must render the fallback/stale-cache
+    warning themselves via ``render_universe_source_warning`` *outside* any
+    ``st.status(...)`` block — st.status auto-collapses once its ``with``
+    block exits, which would otherwise hide the warning inside a collapsed,
+    easy-to-miss expander (this is exactly how a silent Russell 2000 fallback
+    to the ~90-name curated list went unnoticed before).
+    """
+    return st.session_state.data_fetcher.get_index_tickers_with_source(index_key)
+
+
+def render_universe_source_warning(source, universe_option, count):
+    """Render a visible warning/info banner when a universe scan didn't come
+    from a genuine live fetch. Must be called outside any st.status block."""
+    if source == "fallback":
+        st.warning(
+            f"⚠️ Couldn't reach the live data source for {universe_option}; "
+            f"using a small curated fallback list of {count} stocks "
+            "instead of the full index. Results below only cover those "
+            "names — try again later for full coverage."
+        )
+    elif source == "stale_cache":
+        st.info(
+            f"ℹ️ Using a cached (possibly outdated) list of {count} "
+            f"{universe_option} constituents; the live refresh failed."
+        )
+
+
 def main():
     """Main application function."""
 
@@ -244,7 +172,7 @@ def main():
     st.sidebar.title("Navigation")
     page = st.sidebar.radio(
         "Select a page:",
-        ["Stock Screener", "Portfolio Simulator", "Backtesting", "About"]
+        ["Stock Screener", "Portfolio Simulator", "Backtesting", "Graham Entry Analysis", "About"]
     )
 
     if page == "Stock Screener":
@@ -253,6 +181,8 @@ def main():
         show_portfolio_simulator()
     elif page == "Backtesting":
         show_backtesting()
+    elif page == "Graham Entry Analysis":
+        show_graham_entry_analysis()
     elif page == "About":
         show_about()
 
@@ -284,6 +214,20 @@ def show_stock_screener():
             help="Maximum number of stocks to display"
         )
 
+    scan_limit = st.slider(
+        "Universe scan size (max stocks to screen)",
+        min_value=10,
+        max_value=2000,
+        value=100,
+        step=10,
+        help=(
+            "How many stocks from the selected universe to actually screen. "
+            "Higher = more thorough but slower, since each stock is a separate "
+            "data fetch. The S&P 500 is ~500 names; the Russell 2000 is ~2000 "
+            "and can take many minutes to scan in full."
+        ),
+    )
+
     if universe_option.startswith("---"):
         st.info("Please select a specific market index from the dropdown.")
 
@@ -294,21 +238,68 @@ def show_stock_screener():
         elif tickers is not None and len(tickers) == 0:
             st.error("Please enter at least one ticker symbol.")
         else:
-            with st.spinner("Screening stocks... This may take a few minutes."):
-                # Get tickers
-                if tickers is None:
-                    with st.status(f"Fetching {universe_option} tickers..."):
-                        tickers = st.session_state.data_fetcher.get_index_tickers(index_key)
-                        st.write(f"Found {len(tickers)} stocks in {universe_option}")
-
-                # Run screening
-                with st.status(f"Screening {len(tickers)} stocks..."):
-                    if strategy == "Defensive Investor":
-                        results = st.session_state.screener.screen_defensive(tickers)
+            # Get tickers
+            if tickers is None:
+                with st.status(f"Fetching {universe_option} tickers..."):
+                    tickers, source = fetch_index_tickers(index_key, universe_option)
+                    total_found = len(tickers)
+                    # Apply the scan-size cap to index universes (custom
+                    # tickers the user typed are always screened in full).
+                    tickers = tickers[:int(scan_limit)]
+                    if len(tickers) < total_found:
+                        st.write(
+                            f"Found {total_found} stocks in {universe_option}; "
+                            f"screening the first {len(tickers)} (scan size)."
+                        )
                     else:
-                        results = st.session_state.screener.screen_enterprising(tickers)
+                        st.write(f"Found {total_found} stocks in {universe_option}; screening all of them.")
 
-                    st.session_state.screening_results = results
+            render_universe_source_warning(source, universe_option, total_found)
+
+            # Run screening, with live progress: a bar plus running counters
+            # (passed/no-match/errors, and rate-limit errors broken out
+            # specifically) so a large scan isn't just a generic spinner for
+            # several minutes with no visibility into how it's going.
+            st.subheader(f"Screening {len(tickers)} stocks...")
+            progress_bar = st.progress(0.0)
+            status_line = st.empty()
+            metric_cols = st.columns(4)
+            metric_placeholders = [c.empty() for c in metric_cols]
+            last_progress = {}
+
+            def _render_progress(progress):
+                last_progress["snapshot"] = progress
+                frac = progress.completed / progress.total if progress.total else 1.0
+                progress_bar.progress(min(frac, 1.0))
+                eta = progress.eta_seconds
+                eta_str = f", ~{eta:.0f}s left" if eta is not None else ""
+                status_line.write(
+                    f"{progress.completed}/{progress.total} — currently on "
+                    f"**{progress.current_ticker}**{eta_str}"
+                )
+                metric_placeholders[0].metric("Passed", progress.passed)
+                metric_placeholders[1].metric("No match", progress.evaluated)
+                metric_placeholders[2].metric("Errors", progress.errors)
+                metric_placeholders[3].metric("Rate-limited", progress.rate_limited)
+
+            strategy_fn = (
+                st.session_state.screener.screen_defensive
+                if strategy == "Defensive Investor"
+                else st.session_state.screener.screen_enterprising
+            )
+            results = strategy_fn(tickers, progress_callback=_render_progress)
+            st.session_state.screening_results = results
+
+            progress_bar.progress(1.0)
+            status_line.write(f"Done — {len(tickers)}/{len(tickers)} screened.")
+
+            final = last_progress.get("snapshot")
+            if final and final.error_samples:
+                with st.expander(f"⚠️ {final.errors} tickers errored (of which {final.rate_limited} rate-limited)"):
+                    for sample in final.error_samples:
+                        st.text(sample)
+                    if final.errors > len(final.error_samples):
+                        st.caption(f"...and {final.errors - len(final.error_samples)} more (see logs for full detail).")
 
     # Display results
     if st.session_state.screening_results is not None and not st.session_state.screening_results.empty:
@@ -464,7 +455,8 @@ def show_portfolio_simulator():
 
             # Get tickers from the selected market index
             if tickers is None:
-                tickers = st.session_state.data_fetcher.get_index_tickers(index_key)
+                tickers, source = fetch_index_tickers(index_key, universe_option)
+                render_universe_source_warning(source, universe_option, len(tickers))
 
             # Run simulation
             strategy_key = 'defensive' if strategy == "Defensive Investor" else 'enterprising'
@@ -583,7 +575,8 @@ def show_backtesting():
 
             # Get tickers from the selected market index (capped for performance)
             if tickers is None:
-                tickers = st.session_state.data_fetcher.get_index_tickers(index_key)
+                tickers, source = fetch_index_tickers(index_key, universe_option)
+                render_universe_source_warning(source, universe_option, len(tickers))
             tickers = tickers[:int(max_backtest_stocks)]
 
             # Run backtest
@@ -671,6 +664,124 @@ def show_backtesting():
                 use_container_width=True,
                 hide_index=True
             )
+
+
+def show_graham_entry_analysis():
+    """Per-stock analysis: relative performance and historical Graham entry signals."""
+    st.header("🎯 Graham Entry Analysis")
+    st.write(
+        "See how a single stock has performed against its home-country index, and "
+        "when it has traded at a Graham-style discount over one full economic cycle."
+    )
+
+    col1, col2, col3 = st.columns([2, 1, 1])
+    with col1:
+        ticker = st.text_input(
+            "Ticker (use the yfinance symbol, e.g. AAPL, RELIANCE.NS, SHEL.L)",
+            "AAPL",
+        ).strip().upper()
+    with col2:
+        period = st.selectbox(
+            "History window",
+            ["5y", "10y", "max"],
+            index=1,
+            help="Aim for at least one full economic cycle (5-10 years).",
+        )
+    with col3:
+        mos_threshold = st.slider(
+            "Entry margin of safety",
+            min_value=0.0, max_value=0.6, value=0.33, step=0.01,
+            help="Graham looked for ~33% below intrinsic value.",
+        )
+
+    if not ticker:
+        st.info("Enter a ticker to begin.")
+        return
+
+    bench = benchmark_for_ticker(ticker)
+    if bench["matched"]:
+        st.caption(f"Home benchmark: **{bench['name']}** (`{bench['symbol']}`)")
+    else:
+        st.warning(
+            f"No home-country benchmark is mapped for the '.{bench['suffix']}' exchange, "
+            "so the relative-performance comparison will show the stock only."
+        )
+
+    if not st.button("📈 Analyse", type="primary"):
+        return
+
+    backtester = st.session_state.backtester
+
+    # (a) Relative performance vs the home index.
+    st.subheader("Relative performance vs the market")
+    with st.spinner("Fetching price history..."):
+        perf = backtester.relative_performance(ticker, period=period)
+
+    if perf["data"].empty:
+        st.error("Could not retrieve price history for this ticker.")
+        return
+
+    fig_rel = ChartBuilder.create_relative_performance_chart(
+        perf["data"], ticker, perf["benchmark_name"]
+    )
+    st.plotly_chart(fig_rel, use_container_width=True)
+
+    if "benchmark" in perf["data"].columns:
+        stock_ret = perf["data"]["stock"].iloc[-1] - 100
+        bench_ret = perf["data"]["benchmark"].iloc[-1] - 100
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"{ticker} return", f"{stock_ret:.1f}%")
+        c2.metric(f"{perf['benchmark_name']} return", f"{bench_ret:.1f}%")
+        c3.metric("Excess vs market", f"{stock_ret - bench_ret:+.1f}%")
+
+    # (b) Graham entry signals over time.
+    st.subheader("Graham entry points over time")
+    with st.spinner("Reconstructing Graham Number and margin of safety..."):
+        signals = backtester.graham_entry_history(
+            ticker, period=period, mos_threshold=mos_threshold
+        )
+
+    has_graham = (
+        not signals.empty
+        and "graham_number" in signals.columns
+        and signals["graham_number"].notna().any()
+    )
+
+    fig_entry = ChartBuilder.create_graham_entry_chart(signals, ticker)
+    st.plotly_chart(fig_entry, use_container_width=True)
+
+    if not has_graham:
+        st.info(
+            "Not enough historical fundamentals (EPS and book value) were available "
+            "from the free data source to reconstruct the Graham Number for this "
+            "stock. The price line is shown for reference. Graham reconstruction "
+            "works best for large, long-listed companies with full statement history."
+        )
+        return
+
+    # Summary stats over the reconstructed window.
+    valid = signals["graham_number"].notna()
+    entry_share = signals.loc[valid, "is_entry"].mean() * 100 if valid.any() else 0.0
+    current_mos = signals["margin_of_safety"].dropna()
+    fundamentals_years = signals["eps_ttm"].dropna().index
+    span_years = 0
+    if len(fundamentals_years) > 1:
+        span_years = round((fundamentals_years.max() - fundamentals_years.min()).days / 365.25, 1)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Time at a Graham discount", f"{entry_share:.0f}%")
+    if not current_mos.empty:
+        latest = current_mos.iloc[-1] * 100
+        c2.metric("Latest margin of safety", f"{latest:.1f}%",
+                  "undervalued" if latest > 0 else "above intrinsic value")
+    c3.metric("Fundamentals history", f"~{span_years} yrs")
+
+    st.caption(
+        "Green bands mark windows when the stock traded at or below your chosen "
+        "margin-of-safety discount to its Graham Number. Historical fundamentals "
+        "are stepped forward from each annual report date, so the Graham Number "
+        "changes in steps rather than continuously."
+    )
 
 
 def show_about():
