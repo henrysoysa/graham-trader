@@ -30,6 +30,9 @@ class StubFetcher:
     def calculate_graham_number(self, ticker):
         return dict(self._graham)
 
+    def calculate_graham_number_from_metrics(self, ticker, metrics):
+        return dict(self._graham)
+
     def get_earnings_history(self, ticker, years=10):
         import pandas as pd
         if self._earnings_history is None:

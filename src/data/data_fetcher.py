@@ -1104,6 +1104,12 @@ class DataFetcher:
 
         Graham Number = sqrt(22.5 × EPS × Book Value per Share)
 
+        Fetches metrics itself — convenient for a single ad-hoc lookup, but
+        callers that already have ``get_key_metrics(ticker)`` (e.g. a
+        screening loop evaluating several criteria per ticker) should use
+        ``calculate_graham_number_from_metrics`` instead to avoid re-fetching
+        the same data.
+
         Args:
             ticker: Stock ticker symbol
 
@@ -1111,7 +1117,12 @@ class DataFetcher:
             Dictionary with graham_number, intrinsic_value, current_price, margin_of_safety
         """
         metrics = self.get_key_metrics(ticker)
+        return self.calculate_graham_number_from_metrics(ticker, metrics)
 
+    def calculate_graham_number_from_metrics(self, ticker: str, metrics: Dict[str, float]) -> Dict[str, float]:
+        """Same as ``calculate_graham_number``, but computed from an
+        already-fetched ``metrics`` dict (as returned by ``get_key_metrics``)
+        instead of fetching it again."""
         eps = metrics.get('eps', 0)
         book_value = metrics.get('book_value_per_share', 0)
         current_price = metrics.get('current_price', 0)

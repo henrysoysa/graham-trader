@@ -158,29 +158,37 @@ class GrahamScreener:
         eps = hist['EPS'].dropna().sort_index()
         return eps if len(eps) >= 1 else None
 
-    def _earnings_stability_ok(self, ticker: str, min_years: int, current_eps: float) -> bool:
+    def _earnings_stability_ok(self, eps: Optional[pd.Series], current_eps: float) -> bool:
         """Earnings stability = no annual losses across available history.
 
-        Graham asked for ``min_years`` of positive earnings. yfinance rarely
+        Graham asked for multi-year positive earnings. yfinance rarely
         provides more than ~4 years of statements, so we verify that every year
         we *can* see is positive (a real multi-year check when data allows) and
         fall back to the trailing-EPS sign when no history is available — the
         latter keeps sparsely-covered non-US names from being auto-failed on a
         data gap rather than on fundamentals.
+
+        Args:
+            eps: Chronological EPS history (from ``_earnings_history_eps``),
+                shared with ``_earnings_growth_ok`` so it's fetched once per
+                ticker rather than once per criterion.
+            current_eps: Trailing EPS fallback when no history is available.
         """
-        eps = self._earnings_history_eps(ticker)
         if eps is not None:
             return bool((eps > 0).all())
         return bool(current_eps is not None and current_eps > 0)
 
-    def _earnings_growth_ok(self, ticker: str, min_total_growth_10y: float, current_growth: float) -> bool:
+    def _earnings_growth_ok(self, eps: Optional[pd.Series], min_total_growth_10y: float, current_growth: float) -> bool:
         """Earnings growth vs Graham's target (default 33% over 10 years).
 
         Computes annualised EPS growth from available history and compares to
         the annualised equivalent of the 10-year target. Falls back to the
         trailing earnings-growth figure when history is too short.
+
+        Args:
+            eps: Same chronological EPS history passed to
+                ``_earnings_stability_ok`` — fetched once per ticker.
         """
-        eps = self._earnings_history_eps(ticker)
         if eps is not None and len(eps) >= 2:
             oldest = float(eps.iloc[0])
             newest = float(eps.iloc[-1])
@@ -204,10 +212,12 @@ class GrahamScreener:
             Dictionary with evaluation results or None if data unavailable
         """
         metrics = self.data_fetcher.get_key_metrics(ticker)
-        graham_calc = self.data_fetcher.calculate_graham_number(ticker)
 
         if not metrics or metrics.get('current_price', 0) == 0:
             return None
+
+        graham_calc = self.data_fetcher.calculate_graham_number_from_metrics(ticker, metrics)
+        eps_history = self._earnings_history_eps(ticker)
 
         criteria = self.criteria['defensive']
         result = {
@@ -251,9 +261,7 @@ class GrahamScreener:
 
         # 4. Earnings stability — no annual losses across available history
         #    (falls back to trailing-EPS sign when history is unavailable).
-        if self._earnings_stability_ok(
-            ticker, criteria.get('min_earnings_stability', 10), result['eps']
-        ):
+        if self._earnings_stability_ok(eps_history, result['eps']):
             total_score += 1
             result['earnings_stability_check'] = True
         else:
@@ -290,7 +298,7 @@ class GrahamScreener:
 
         # 9. Earnings growth vs Graham's target (default 33% over 10 years).
         if self._earnings_growth_ok(
-            ticker,
+            eps_history,
             criteria.get('min_earnings_growth', 0.33),
             metrics.get('earnings_growth', 0),
         ):
@@ -334,10 +342,12 @@ class GrahamScreener:
             Dictionary with evaluation results or None if data unavailable
         """
         metrics = self.data_fetcher.get_key_metrics(ticker)
-        graham_calc = self.data_fetcher.calculate_graham_number(ticker)
 
         if not metrics or metrics.get('current_price', 0) == 0:
             return None
+
+        graham_calc = self.data_fetcher.calculate_graham_number_from_metrics(ticker, metrics)
+        eps_history = self._earnings_history_eps(ticker)
 
         criteria = self.criteria['enterprising']
         result = {
@@ -371,9 +381,7 @@ class GrahamScreener:
 
         # 3. Earnings stability — no annual losses across available history
         #    (falls back to trailing-EPS sign when history is unavailable).
-        if self._earnings_stability_ok(
-            ticker, criteria.get('min_earnings_stability', 5), result['eps']
-        ):
+        if self._earnings_stability_ok(eps_history, result['eps']):
             total_score += 1
             result['earnings_check'] = True
         else:

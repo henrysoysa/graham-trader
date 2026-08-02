@@ -141,19 +141,29 @@ def _screener(earnings_history):
     return GrahamScreener(fetcher, CRITERIA)
 
 
+def _eps_series(screener, ticker="X"):
+    """_earnings_stability_ok/_earnings_growth_ok now take the EPS Series
+    directly (fetched once per ticker and shared between both checks) rather
+    than fetching it themselves — this mirrors how _evaluate_defensive and
+    _evaluate_enterprising call them."""
+    return screener._earnings_history_eps(ticker)
+
+
 def test_stability_all_positive_history_passes():
-    assert _screener([1.0, 2.0, 3.0])._earnings_stability_ok("X", 10, 3.0) is True
+    s = _screener([1.0, 2.0, 3.0])
+    assert s._earnings_stability_ok(_eps_series(s), 3.0) is True
 
 
 def test_stability_fails_with_a_loss_year():
     # A single negative year breaks stability even if the latest year is positive.
-    assert _screener([2.0, -0.5, 3.0])._earnings_stability_ok("X", 10, 3.0) is False
+    s = _screener([2.0, -0.5, 3.0])
+    assert s._earnings_stability_ok(_eps_series(s), 3.0) is False
 
 
 def test_stability_falls_back_to_trailing_eps_when_no_history():
     s = _screener(None)
-    assert s._earnings_stability_ok("X", 10, 4.0) is True
-    assert s._earnings_stability_ok("X", 10, -1.0) is False
+    assert s._earnings_stability_ok(_eps_series(s), 4.0) is True
+    assert s._earnings_stability_ok(_eps_series(s), -1.0) is False
 
 
 # --------------------------------------------------------------------------
@@ -162,21 +172,24 @@ def test_stability_falls_back_to_trailing_eps_when_no_history():
 
 def test_growth_strong_history_passes():
     # ~13%/yr, comfortably above the ~2.9%/yr annualised 33%-over-10y target.
-    assert _screener([3.0, 3.5, 4.0, 4.5, 5.0])._earnings_growth_ok("X", 0.33, 0.0) is True
+    s = _screener([3.0, 3.5, 4.0, 4.5, 5.0])
+    assert s._earnings_growth_ok(_eps_series(s), 0.33, 0.0) is True
 
 
 def test_growth_flat_history_fails():
-    assert _screener([5.0, 5.0, 5.0])._earnings_growth_ok("X", 0.33, 0.0) is False
+    s = _screener([5.0, 5.0, 5.0])
+    assert s._earnings_growth_ok(_eps_series(s), 0.33, 0.0) is False
 
 
 def test_growth_declining_history_fails():
-    assert _screener([6.0, 5.0, 4.0])._earnings_growth_ok("X", 0.33, 0.0) is False
+    s = _screener([6.0, 5.0, 4.0])
+    assert s._earnings_growth_ok(_eps_series(s), 0.33, 0.0) is False
 
 
 def test_growth_falls_back_to_trailing_growth_when_history_short():
     s = _screener([5.0])          # only one point -> use trailing figure
-    assert s._earnings_growth_ok("X", 0.33, 0.08) is True
-    assert s._earnings_growth_ok("X", 0.33, -0.02) is False
+    assert s._earnings_growth_ok(_eps_series(s), 0.33, 0.08) is True
+    assert s._earnings_growth_ok(_eps_series(s), 0.33, -0.02) is False
 
 
 # --------------------------------------------------------------------------
